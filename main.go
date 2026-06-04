@@ -57,10 +57,11 @@ func run() error {
 		return nil
 	}
 
-	logger := authsvc.NewLogger(os.Stderr, cfg.LogLevel)
+	logger := authsvc.NewLogger(os.Stderr, cfg.LogLevel, cfg.ScrubSecrets)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	return authsvc.NewServer(cfg, logger, build).Run(ctx)
+	up := authsvc.BuildUpstreams(cfg)
+	return authsvc.NewServer(cfg, logger, build, up).Run(ctx)
 }

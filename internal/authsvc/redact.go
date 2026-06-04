@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -138,6 +139,87 @@ func scrubAttr(a slog.Attr) slog.Attr {
 		return slog.Group(a.Key, out...)
 	case slog.KindString:
 		return slog.String(a.Key, redactValue(a.Value.String()))
+	}
+	return a
+}
+
+// ── Exact-value secret scrub ──────────────────────────────────────────────────
+//
+// scrubHandler replaces exact occurrences of the service's own injected secrets
+// (e.g. the JupyterHub admin token) with a placeholder, wherever they appear in
+// a string message or attribute value. This is the slog analogue of the support
+// bundle's known-secret scrub: it guarantees the service's own credentials never
+// reach the log even if some record echoes one — while UUID-shaped non-secrets
+// (alloc/eval IDs) survive because they don't equal a known secret. Secrets
+// shorter than 6 chars are ignored.
+
+type scrubHandler struct {
+	inner   slog.Handler
+	secrets []string // deduped, longest-first, len>=6
+}
+
+// wrapScrub wraps inner with an exact-value secret scrub. If no usable secrets
+// are supplied it returns inner unchanged (no overhead).
+func wrapScrub(inner slog.Handler, secrets []string) slog.Handler {
+	seen := make(map[string]bool, len(secrets))
+	keep := make([]string, 0, len(secrets))
+	for _, s := range secrets {
+		s = strings.TrimSpace(s)
+		if len(s) >= 6 && !seen[s] {
+			seen[s] = true
+			keep = append(keep, s)
+		}
+	}
+	if len(keep) == 0 {
+		return inner
+	}
+	sort.SliceStable(keep, func(i, j int) bool { return len(keep[i]) > len(keep[j]) })
+	return &scrubHandler{inner: inner, secrets: keep}
+}
+
+func (h *scrubHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return h.inner.Enabled(ctx, l)
+}
+
+func (h *scrubHandler) Handle(ctx context.Context, r slog.Record) error {
+	nr := slog.NewRecord(r.Time, r.Level, h.scrub(r.Message), r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		nr.AddAttrs(h.scrubAttr(a))
+		return true
+	})
+	return h.inner.Handle(ctx, nr)
+}
+
+func (h *scrubHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	out := make([]slog.Attr, len(attrs))
+	for i, a := range attrs {
+		out[i] = h.scrubAttr(a)
+	}
+	return &scrubHandler{inner: h.inner.WithAttrs(out), secrets: h.secrets}
+}
+
+func (h *scrubHandler) WithGroup(name string) slog.Handler {
+	return &scrubHandler{inner: h.inner.WithGroup(name), secrets: h.secrets}
+}
+
+func (h *scrubHandler) scrub(s string) string {
+	for _, sec := range h.secrets {
+		s = strings.ReplaceAll(s, sec, "[REDACTED:secret]")
+	}
+	return s
+}
+
+func (h *scrubHandler) scrubAttr(a slog.Attr) slog.Attr {
+	switch a.Value.Kind() {
+	case slog.KindGroup:
+		sub := a.Value.Group()
+		out := make([]any, len(sub))
+		for i, s := range sub {
+			out[i] = h.scrubAttr(s)
+		}
+		return slog.Group(a.Key, out...)
+	case slog.KindString:
+		return slog.String(a.Key, h.scrub(a.Value.String()))
 	}
 	return a
 }

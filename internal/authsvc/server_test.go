@@ -13,12 +13,13 @@ import (
 func newTestServer(t *testing.T) (*Server, *bytes.Buffer) {
 	t.Helper()
 	var buf bytes.Buffer
-	logger := NewLogger(&buf, L1)
+	logger := NewLogger(&buf, L1, nil)
 	cfg, err := LoadConfig(nil, func(string) string { return "" })
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	return NewServer(cfg, logger, BuildInfo{Version: "test"}), &buf
+	up := Upstreams{Nomad: mockNomad{}, Hub: mockHub{}, HubPublicURL: "https://hub.test"}
+	return NewServer(cfg, logger, BuildInfo{Version: "test"}, up), &buf
 }
 
 func TestHealthz(t *testing.T) {

@@ -27,6 +27,11 @@ const (
 	// the strangler-fig migration.
 	DefaultListenAddr = "127.0.0.1:4182"
 
+	// Upstream defaults (overridable by flag/env).
+	DefaultNomadAddr        = "http://127.0.0.1:4646"
+	DefaultJupyterHubAPIURL = "http://127.0.0.1:15001/hub/api"
+	DefaultHubPublicURL     = "https://workbench.seedling.abc-cluster.cloud"
+
 	defaultReadTimeout   = 10 * time.Second
 	defaultWriteTimeout  = 15 * time.Second
 	defaultIdleTimeout   = 60 * time.Second
@@ -42,6 +47,13 @@ type Config struct {
 	LogLevel      slog.Level
 	MockUpstreams bool
 	ShowVersion   bool
+
+	// Upstream endpoints (Phase 1+). JupyterHubAdminToken is a secret — env only,
+	// never a flag — and is added to ScrubSecrets so it can never appear in logs.
+	NomadAddr            string
+	JupyterHubAPIURL     string
+	JupyterHubAdminToken string
+	HubPublicURL         string
 
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
@@ -59,12 +71,15 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	}
 
 	cfg := Config{
-		ListenAddr:    DefaultListenAddr,
-		LogLevel:      L1,
-		ReadTimeout:   defaultReadTimeout,
-		WriteTimeout:  defaultWriteTimeout,
-		IdleTimeout:   defaultIdleTimeout,
-		ShutdownGrace: defaultShutdownGrace,
+		ListenAddr:       DefaultListenAddr,
+		LogLevel:         L1,
+		NomadAddr:        DefaultNomadAddr,
+		JupyterHubAPIURL: DefaultJupyterHubAPIURL,
+		HubPublicURL:     DefaultHubPublicURL,
+		ReadTimeout:      defaultReadTimeout,
+		WriteTimeout:     defaultWriteTimeout,
+		IdleTimeout:      defaultIdleTimeout,
+		ShutdownGrace:    defaultShutdownGrace,
 	}
 
 	// Env first, so explicit flags can still override below.
@@ -81,12 +96,25 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	if isTruthy(getenv("ABC_AUTH_MOCK_UPSTREAMS")) {
 		cfg.MockUpstreams = true
 	}
+	if v := strings.TrimSpace(getenv("NOMAD_ADDR")); v != "" {
+		cfg.NomadAddr = v
+	}
+	if v := strings.TrimSpace(getenv("JUPYTERHUB_API_URL")); v != "" {
+		cfg.JupyterHubAPIURL = v
+	}
+	if v := strings.TrimSpace(getenv("HUB_PUBLIC_URL")); v != "" {
+		cfg.HubPublicURL = v
+	}
+	cfg.JupyterHubAdminToken = strings.TrimSpace(getenv("JUPYTERHUB_API_TOKEN")) // secret: env only
 
 	fs := flag.NewFlagSet("abc-auth-svc", flag.ContinueOnError)
 	listen := fs.String("listen", cfg.ListenAddr, "listen address (host:port)")
 	logLevel := fs.String("log-level", levelString(cfg.LogLevel), "log level: info|debug|trace")
 	mock := fs.Bool("mock-upstreams", cfg.MockUpstreams, "stub PB/JH/MinIO/Nomad with deterministic responses (local dev)")
 	showVersion := fs.Bool("version", false, "print version and exit")
+	nomadAddr := fs.String("nomad-addr", cfg.NomadAddr, "Nomad API address for token validation")
+	jhAPIURL := fs.String("jupyterhub-api-url", cfg.JupyterHubAPIURL, "JupyterHub API base URL")
+	hubPublicURL := fs.String("hub-public-url", cfg.HubPublicURL, "public workbench URL returned to clients")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -99,6 +127,14 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.LogLevel = lvl
 	cfg.MockUpstreams = *mock
 	cfg.ShowVersion = *showVersion
+	cfg.NomadAddr = *nomadAddr
+	cfg.JupyterHubAPIURL = *jhAPIURL
+	cfg.HubPublicURL = *hubPublicURL
+
+	// Secrets feed the exact-value log scrub.
+	if cfg.JupyterHubAdminToken != "" {
+		cfg.ScrubSecrets = append(cfg.ScrubSecrets, cfg.JupyterHubAdminToken)
+	}
 
 	return cfg, nil
 }

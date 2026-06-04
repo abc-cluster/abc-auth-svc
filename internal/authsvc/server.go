@@ -12,6 +12,7 @@ type Server struct {
 	cfg   Config
 	log   *slog.Logger
 	build BuildInfo
+	up    Upstreams
 	http  *http.Server
 }
 
@@ -20,13 +21,18 @@ type Server struct {
 // Middleware order (outer → inner): withBaseLogger → VersionHeader → RequestID →
 // AccessLog → Recoverer → mux. Recoverer is inside AccessLog so a recovered
 // panic's 500 is reflected in the access record.
-func NewServer(cfg Config, logger *slog.Logger, build BuildInfo) *Server {
-	s := &Server{cfg: cfg, log: logger, build: build}
+func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *Server {
+	s := &Server{cfg: cfg, log: logger, build: build, up: up}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	// Caddy serves abc-auth-svc under /auth/* and strips the prefix, so the
+	// Python service sees /workbench/token. Register both so the Go service works
+	// whether or not the per-path Caddy rule strips /auth.
+	mux.HandleFunc("POST /workbench/token", s.handleWorkbenchToken)
+	mux.HandleFunc("POST /auth/workbench/token", s.handleWorkbenchToken)
 	mux.HandleFunc("/", s.handleNotFound)
 
 	handler := chain(mux,

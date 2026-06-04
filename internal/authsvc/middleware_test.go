@@ -29,7 +29,7 @@ func TestStatusWriter_CapturesStatusAndBytes(t *testing.T) {
 // AccessLog).
 func TestRecoverer_RecoversPanicAnd500(t *testing.T) {
 	var buf bytes.Buffer
-	logger := NewLogger(&buf, L1)
+	logger := NewLogger(&buf, L1, nil)
 
 	panicky := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
@@ -94,7 +94,7 @@ func TestSanitizeRequestID(t *testing.T) {
 // value-pattern net.
 func TestRedactingHandler_FieldAndPattern(t *testing.T) {
 	var buf bytes.Buffer
-	logger := NewLogger(&buf, L1)
+	logger := NewLogger(&buf, L1, nil)
 	logger.Info("test",
 		"access_token", "should-be-hidden-by-key",
 		"note", "Authorization: Bearer abcDEF1234567890ghiJKL9876",
@@ -114,7 +114,7 @@ func TestGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	s := NewServer(cfg, NewLogger(&buf, L1), BuildInfo{Version: "test"})
+	s := NewServer(cfg, NewLogger(&buf, L1, nil), BuildInfo{Version: "test"}, Upstreams{Nomad: mockNomad{}, Hub: mockHub{}})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
