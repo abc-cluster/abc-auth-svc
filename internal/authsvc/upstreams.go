@@ -3,14 +3,26 @@ package authsvc
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// ClusterInfo is the cluster identity stamped into the /auth/exchange bundle.
+type ClusterInfo struct {
+	NomadEndpoint string
+	MinioEndpoint string
+	Datacenter    string
+	HeadPool      string
+	WorkerPool    string
+}
 
 // Upstreams bundles the external dependencies the handlers call. It is injected
 // into the server so tests can substitute mocks.
 type Upstreams struct {
 	Nomad        NomadValidator
 	Hub          HubMinter
+	Store        SlotStore
+	Cluster      ClusterInfo
 	HubPublicURL string
 }
 
@@ -18,16 +30,27 @@ type Upstreams struct {
 // deterministic mocks when --mock-upstreams is set (local dev / contributor
 // testing without a live cluster).
 func BuildUpstreams(cfg Config) Upstreams {
+	cluster := ClusterInfo{
+		NomadEndpoint: cfg.ClusterNomadEndpoint,
+		MinioEndpoint: cfg.ClusterMinioEndpoint,
+		Datacenter:    cfg.ClusterDatacenter,
+		HeadPool:      cfg.ClusterHeadPool,
+		WorkerPool:    cfg.ClusterWorkerPool,
+	}
 	if cfg.MockUpstreams {
 		return Upstreams{
 			Nomad:        mockNomad{},
 			Hub:          mockHub{},
+			Store:        mockStore{},
+			Cluster:      cluster,
 			HubPublicURL: cfg.HubPublicURL,
 		}
 	}
 	return Upstreams{
 		Nomad:        &NomadClient{Addr: cfg.NomadAddr, HTTP: &http.Client{Timeout: 5 * time.Second}},
 		Hub:          &HubClient{APIURL: cfg.JupyterHubAPIURL, AdminToken: cfg.JupyterHubAdminToken, HTTP: &http.Client{Timeout: 10 * time.Second}},
+		Store:        NewPBClient(cfg.PocketBaseURL, cfg.PBAdminEmail, cfg.PBAdminPassword, &http.Client{Timeout: 10 * time.Second}),
+		Cluster:      cluster,
 		HubPublicURL: cfg.HubPublicURL,
 	}
 }
@@ -57,3 +80,28 @@ func (mockHub) MintUserToken(_ context.Context, user, note string, expiresIn int
 		Note:      note,
 	}, nil
 }
+
+type mockStore struct{}
+
+// FindSlot resolves any opaque lookup to a fixed claimed seedling/v1 slot so
+// `abc auth config refresh` can be exercised against the Go service without a
+// PocketBase; any other filter returns no slot.
+func (mockStore) FindSlot(_ context.Context, filter string) (*Slot, error) {
+	if strings.Contains(filter, "opaque_token_hash=") {
+		return &Slot{
+			ID: "mock", SlotName: "slot-calm_dassie", GroupName: "mbhg-hostgen",
+			NomadTokenSecret: "mock-nomad-token-secret", MinioAccessKey: "calm_dassie",
+			MinioSecretKey: "mock-minio-secret-key", State: "claimed", CredSource: "seedling/v1",
+		}, nil
+	}
+	return nil, nil
+}
+
+func (mockStore) GroupName(_ context.Context, slot *Slot) string {
+	if slot != nil {
+		return slot.GroupName
+	}
+	return ""
+}
+
+func (mockStore) CachedSlotState(context.Context, string) string { return "none" }

@@ -32,6 +32,15 @@ const (
 	DefaultJupyterHubAPIURL = "http://127.0.0.1:15001/hub/api"
 	DefaultHubPublicURL     = "https://workbench.seedling.abc-cluster.cloud"
 
+	// PocketBase + cluster defaults (env-driven in production; Nomad injects them).
+	DefaultPocketBaseURL        = "http://127.0.0.1:8091"
+	DefaultPBAdminEmail         = "abc-auth@internal"
+	DefaultClusterNomadEndpoint = "https://nomad.seedling.abc-cluster.cloud"
+	DefaultClusterMinioEndpoint = "https://s3.seedling.abc-cluster.cloud"
+	DefaultClusterDatacenter    = "seedling-prod"
+	DefaultClusterHeadPool      = "platform"
+	DefaultClusterWorkerPool    = "compute"
+
 	defaultReadTimeout   = 10 * time.Second
 	defaultWriteTimeout  = 15 * time.Second
 	defaultIdleTimeout   = 60 * time.Second
@@ -48,12 +57,23 @@ type Config struct {
 	MockUpstreams bool
 	ShowVersion   bool
 
-	// Upstream endpoints (Phase 1+). JupyterHubAdminToken is a secret — env only,
-	// never a flag — and is added to ScrubSecrets so it can never appear in logs.
+	// Upstream endpoints (Phase 1+). JupyterHubAdminToken and PBAdminPassword are
+	// secrets — env only, never flags — and are added to ScrubSecrets so they can
+	// never appear in logs.
 	NomadAddr            string
 	JupyterHubAPIURL     string
 	JupyterHubAdminToken string
 	HubPublicURL         string
+
+	// PocketBase (slot store) + cluster identity for the credential bundle.
+	PocketBaseURL        string
+	PBAdminEmail         string
+	PBAdminPassword      string
+	ClusterNomadEndpoint string
+	ClusterMinioEndpoint string
+	ClusterDatacenter    string
+	ClusterHeadPool      string
+	ClusterWorkerPool    string
 
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
@@ -107,6 +127,16 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	}
 	cfg.JupyterHubAdminToken = strings.TrimSpace(getenv("JUPYTERHUB_API_TOKEN")) // secret: env only
 
+	// PocketBase + cluster config — env with defaults (no flags; Nomad injects).
+	cfg.PocketBaseURL = getenvOr(getenv, "POCKETBASE_URL", DefaultPocketBaseURL)
+	cfg.PBAdminEmail = getenvOr(getenv, "PB_ADMIN_EMAIL", DefaultPBAdminEmail)
+	cfg.PBAdminPassword = strings.TrimSpace(getenv("PB_ADMIN_PASSWORD")) // secret: env only
+	cfg.ClusterNomadEndpoint = getenvOr(getenv, "CLUSTER_NOMAD_ENDPOINT", DefaultClusterNomadEndpoint)
+	cfg.ClusterMinioEndpoint = getenvOr(getenv, "CLUSTER_MINIO_ENDPOINT", DefaultClusterMinioEndpoint)
+	cfg.ClusterDatacenter = getenvOr(getenv, "CLUSTER_DATACENTER", DefaultClusterDatacenter)
+	cfg.ClusterHeadPool = getenvOr(getenv, "CLUSTER_HEAD_POOL", DefaultClusterHeadPool)
+	cfg.ClusterWorkerPool = getenvOr(getenv, "CLUSTER_WORKER_POOL", DefaultClusterWorkerPool)
+
 	fs := flag.NewFlagSet("abc-auth-svc", flag.ContinueOnError)
 	listen := fs.String("listen", cfg.ListenAddr, "listen address (host:port)")
 	logLevel := fs.String("log-level", levelString(cfg.LogLevel), "log level: info|debug|trace")
@@ -132,11 +162,20 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.HubPublicURL = *hubPublicURL
 
 	// Secrets feed the exact-value log scrub.
-	if cfg.JupyterHubAdminToken != "" {
-		cfg.ScrubSecrets = append(cfg.ScrubSecrets, cfg.JupyterHubAdminToken)
+	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword} {
+		if sec != "" {
+			cfg.ScrubSecrets = append(cfg.ScrubSecrets, sec)
+		}
 	}
 
 	return cfg, nil
+}
+
+func getenvOr(getenv func(string) string, key, def string) string {
+	if v := strings.TrimSpace(getenv(key)); v != "" {
+		return v
+	}
+	return def
 }
 
 func parseLevel(s string) (slog.Level, error) {

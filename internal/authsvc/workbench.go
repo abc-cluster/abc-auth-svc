@@ -69,11 +69,15 @@ func (s *Server) handleWorkbenchToken(w http.ResponseWriter, r *http.Request) {
 		jhUser, abcUser = rawName, rawName
 	}
 
-	// NOTE (Phase 1b): the Python service also blocks suspended/expired slots
-	// here via a PocketBase slot-state lookup (defence in depth). That check is
-	// deferred until the PocketBase client lands — suspend already revokes the
-	// slot's Nomad token, so a suspended slot fails LookupTokenSelf above and
-	// never reaches this point.
+	// Block suspended/expired slots from minting (defence in depth — JH itself
+	// has no slot-state model). Keyed on minio_access_key == the bare abc user.
+	// Skipped when no slot store is configured; "error"/"none" fail open.
+	if s.up.Store != nil {
+		if st := s.up.Store.CachedSlotState(ctx, abcUser); st == "suspended" || st == "expired" {
+			errJSON(w, http.StatusForbidden, "slot is "+st)
+			return
+		}
+	}
 
 	// 3. Parse the optional body { note, expires_in }.
 	bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 64<<10))

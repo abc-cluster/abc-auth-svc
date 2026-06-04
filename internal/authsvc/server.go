@@ -33,6 +33,10 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	// whether or not the per-path Caddy rule strips /auth.
 	mux.HandleFunc("POST /workbench/token", s.handleWorkbenchToken)
 	mux.HandleFunc("POST /auth/workbench/token", s.handleWorkbenchToken)
+	// Opaque-token credential broker (cred_source = seedling/v1). Caddy strips
+	// /auth, so register both.
+	mux.HandleFunc("POST /auth/exchange", s.handleAuthExchange)
+	mux.HandleFunc("POST /exchange", s.handleAuthExchange)
 	mux.HandleFunc("/", s.handleNotFound)
 
 	handler := chain(mux,
