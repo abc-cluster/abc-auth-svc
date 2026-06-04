@@ -5,15 +5,19 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 // Server is the abc-auth-svc HTTP server.
 type Server struct {
-	cfg   Config
-	log   *slog.Logger
-	build BuildInfo
-	up    Upstreams
-	http  *http.Server
+	cfg          Config
+	log          *slog.Logger
+	build        BuildInfo
+	up           Upstreams
+	session      sessionVerifier
+	shadowURL    string
+	shadowClient *http.Client
+	http         *http.Server
 }
 
 // NewServer builds the server with its middleware chain and routes.
@@ -22,12 +26,26 @@ type Server struct {
 // AccessLog → Recoverer → mux. Recoverer is inside AccessLog so a recovered
 // panic's 500 is reflected in the access record.
 func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *Server {
-	s := &Server{cfg: cfg, log: logger, build: build, up: up}
+	s := &Server{
+		cfg: cfg, log: logger, build: build, up: up,
+		session:   sessionVerifier{secret: []byte(cfg.SessionSecret)},
+		shadowURL: cfg.ShadowValidateURL,
+		shadowClient: &http.Client{
+			Timeout: 3 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse // don't follow the 302 — it's the signal
+			},
+		},
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /version", s.handleVersion)
+	// Forward-auth hot path.
+	mux.HandleFunc("GET /validate", s.handleValidate)
+	mux.HandleFunc("GET /validate-optional", s.handleValidateOptional)
+	mux.HandleFunc("GET /validate-shadow", s.handleValidateShadow)
 	// Caddy serves abc-auth-svc under /auth/* and strips the prefix, so the
 	// Python service sees /workbench/token. Register both so the Go service works
 	// whether or not the per-path Caddy rule strips /auth.

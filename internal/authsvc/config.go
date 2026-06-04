@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,6 +85,15 @@ type Config struct {
 	// OperatorToken gates /manage/* (X-Operator-Token). Secret — env only.
 	OperatorToken string
 
+	// Session (forward-auth) — SessionSecret is the HMAC key (secret, env only);
+	// cookie flags mirror the Python. ShadowValidateURL points /validate-shadow at
+	// the Python /validate for parity comparison (empty disables comparison).
+	SessionSecret     string
+	SessionTTL        time.Duration
+	CookieSecure      bool
+	CookieDomain      string
+	ShadowValidateURL string
+
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
 	IdleTimeout   time.Duration
@@ -150,6 +160,21 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.ClusterAuthEndpoint = getenvOr(getenv, "CLUSTER_AUTH_ENDPOINT", DefaultClusterAuthEndpoint)
 	cfg.OperatorToken = strings.TrimSpace(getenv("OPERATOR_TOKEN")) // secret: env only
 
+	// Session / cookie / shadow.
+	cfg.SessionSecret = getenv("SESSION_SECRET") // secret: env only (not trimmed — preserve exact key bytes)
+	cfg.SessionTTL = 7 * 24 * time.Hour
+	if v := strings.TrimSpace(getenv("SESSION_TTL_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.SessionTTL = time.Duration(n) * time.Second
+		}
+	}
+	cfg.CookieSecure = true
+	if v := strings.TrimSpace(getenv("COOKIE_SECURE")); v != "" {
+		cfg.CookieSecure = isTruthy(v)
+	}
+	cfg.CookieDomain = strings.TrimSpace(getenv("COOKIE_DOMAIN"))
+	cfg.ShadowValidateURL = strings.TrimSpace(getenv("SHADOW_VALIDATE_URL"))
+
 	fs := flag.NewFlagSet("abc-auth-svc", flag.ContinueOnError)
 	listen := fs.String("listen", cfg.ListenAddr, "listen address (host:port)")
 	logLevel := fs.String("log-level", levelString(cfg.LogLevel), "log level: info|debug|trace")
@@ -175,7 +200,7 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.HubPublicURL = *hubPublicURL
 
 	// Secrets feed the exact-value log scrub.
-	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword, cfg.OperatorToken} {
+	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword, cfg.OperatorToken, cfg.SessionSecret} {
 		if sec != "" {
 			cfg.ScrubSecrets = append(cfg.ScrubSecrets, sec)
 		}
