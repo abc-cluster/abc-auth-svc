@@ -37,6 +37,11 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	// /auth, so register both.
 	mux.HandleFunc("POST /auth/exchange", s.handleAuthExchange)
 	mux.HandleFunc("POST /exchange", s.handleAuthExchange)
+	// Config refresh (`abc auth config refresh`) and operator cred-source flip.
+	mux.HandleFunc("GET /slots/me/config", s.handleSlotsMeConfig)
+	mux.HandleFunc("GET /auth/slots/me/config", s.handleSlotsMeConfig)
+	mux.HandleFunc("POST /manage/slots/{slot}/cred-source", s.handleCredSource)
+	mux.HandleFunc("POST /auth/manage/slots/{slot}/cred-source", s.handleCredSource)
 	mux.HandleFunc("/", s.handleNotFound)
 
 	handler := chain(mux,

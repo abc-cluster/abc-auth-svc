@@ -36,11 +36,14 @@ func (f fakeStore) CachedSlotState(ctx context.Context, username string) string 
 }
 
 var testCluster = ClusterInfo{
-	NomadEndpoint: "https://nomad.test",
-	MinioEndpoint: "https://s3.test",
-	Datacenter:    "dc1",
-	HeadPool:      "platform",
-	WorkerPool:    "compute",
+	Name:           "seedling",
+	NomadEndpoint:  "https://nomad.test",
+	MinioEndpoint:  "https://s3.test",
+	UploadEndpoint: "https://upload.test/files/",
+	AuthEndpoint:   "https://auth.test",
+	Datacenter:     "dc1",
+	HeadPool:       "platform",
+	WorkerPool:     "compute",
 }
 
 func exServer(t *testing.T, store SlotStore) (*Server, *bytes.Buffer) {

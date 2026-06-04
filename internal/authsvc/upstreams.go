@@ -7,13 +7,17 @@ import (
 	"time"
 )
 
-// ClusterInfo is the cluster identity stamped into the /auth/exchange bundle.
+// ClusterInfo is the cluster identity stamped into the /auth/exchange bundle and
+// the rendered config.yaml.
 type ClusterInfo struct {
-	NomadEndpoint string
-	MinioEndpoint string
-	Datacenter    string
-	HeadPool      string
-	WorkerPool    string
+	Name           string
+	NomadEndpoint  string
+	MinioEndpoint  string
+	UploadEndpoint string
+	AuthEndpoint   string
+	Datacenter     string
+	HeadPool       string
+	WorkerPool     string
 }
 
 // Upstreams bundles the external dependencies the handlers call. It is injected
@@ -31,11 +35,14 @@ type Upstreams struct {
 // testing without a live cluster).
 func BuildUpstreams(cfg Config) Upstreams {
 	cluster := ClusterInfo{
-		NomadEndpoint: cfg.ClusterNomadEndpoint,
-		MinioEndpoint: cfg.ClusterMinioEndpoint,
-		Datacenter:    cfg.ClusterDatacenter,
-		HeadPool:      cfg.ClusterHeadPool,
-		WorkerPool:    cfg.ClusterWorkerPool,
+		Name:           cfg.ClusterName,
+		NomadEndpoint:  cfg.ClusterNomadEndpoint,
+		MinioEndpoint:  cfg.ClusterMinioEndpoint,
+		UploadEndpoint: cfg.ClusterUploadEndpoint,
+		AuthEndpoint:   cfg.ClusterAuthEndpoint,
+		Datacenter:     cfg.ClusterDatacenter,
+		HeadPool:       cfg.ClusterHeadPool,
+		WorkerPool:     cfg.ClusterWorkerPool,
 	}
 	if cfg.MockUpstreams {
 		return Upstreams{
@@ -83,16 +90,20 @@ func (mockHub) MintUserToken(_ context.Context, user, note string, expiresIn int
 
 type mockStore struct{}
 
-// FindSlot resolves any opaque lookup to a fixed claimed seedling/v1 slot so
-// `abc auth config refresh` can be exercised against the Go service without a
-// PocketBase; any other filter returns no slot.
+func mockSlot() *Slot {
+	return &Slot{
+		ID: "mock", SlotName: "slot-calm_dassie", GroupName: "mbhg-hostgen",
+		NomadTokenSecret: "mock-nomad-token-secret", MinioAccessKey: "calm_dassie",
+		MinioSecretKey: "mock-minio-secret-key", State: "claimed", CredSource: "seedling/v1",
+	}
+}
+
+// FindSlot resolves opaque/slot_name lookups to a fixed claimed seedling/v1 slot
+// so the broker / config / flip paths can be exercised without a PocketBase; any
+// other filter returns no slot.
 func (mockStore) FindSlot(_ context.Context, filter string) (*Slot, error) {
-	if strings.Contains(filter, "opaque_token_hash=") {
-		return &Slot{
-			ID: "mock", SlotName: "slot-calm_dassie", GroupName: "mbhg-hostgen",
-			NomadTokenSecret: "mock-nomad-token-secret", MinioAccessKey: "calm_dassie",
-			MinioSecretKey: "mock-minio-secret-key", State: "claimed", CredSource: "seedling/v1",
-		}, nil
+	if strings.Contains(filter, "opaque_token_hash=") || strings.Contains(filter, "slot_name=") {
+		return mockSlot(), nil
 	}
 	return nil, nil
 }
@@ -104,4 +115,7 @@ func (mockStore) GroupName(_ context.Context, slot *Slot) string {
 	return ""
 }
 
-func (mockStore) CachedSlotState(context.Context, string) string { return "none" }
+func (mockStore) CachedSlotState(context.Context, string) string          { return "none" }
+func (mockStore) GetSlot(context.Context, string) (*Slot, error)          { return mockSlot(), nil }
+func (mockStore) PatchSlot(context.Context, string, map[string]any) error { return nil }
+func (mockStore) InvalidateSlotState(string)                              {}

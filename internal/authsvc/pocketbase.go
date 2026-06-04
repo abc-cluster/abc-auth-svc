@@ -31,8 +31,8 @@ type Slot struct {
 	ConfigYAML       string `json:"config_yaml"`
 }
 
-// SlotStore is the slot/group data access the handlers depend on (interface so
-// tests can substitute a fake).
+// SlotStore is the read-path slot/group access the common handlers depend on
+// (interface so tests can substitute a fake).
 type SlotStore interface {
 	// FindSlot returns the first slot matching a PocketBase filter expression, or
 	// (nil, nil) when none match.
@@ -43,6 +43,15 @@ type SlotStore interface {
 	// minio_access_key), with a short cache. "none" = no such slot; "error" =
 	// store unreachable (callers fail open).
 	CachedSlotState(ctx context.Context, username string) string
+}
+
+// SlotManager adds the write operations the operator endpoints need. The real
+// PBClient implements it; the cred-source flip handler type-asserts for it.
+type SlotManager interface {
+	SlotStore
+	GetSlot(ctx context.Context, id string) (*Slot, error)
+	PatchSlot(ctx context.Context, id string, fields map[string]any) error
+	InvalidateSlotState(username string)
 }
 
 // PBClient is the real SlotStore: an authenticated PocketBase REST client with a
@@ -177,6 +186,37 @@ func (c *PBClient) FindSlot(ctx context.Context, filter string) (*Slot, error) {
 		return nil, nil
 	}
 	return &out.Items[0], nil
+}
+
+// GetSlot fetches a single slot record by id.
+func (c *PBClient) GetSlot(ctx context.Context, id string) (*Slot, error) {
+	rb, err := c.do(ctx, http.MethodGet, "/api/collections/slots/records/"+url.PathEscape(id), nil, true)
+	if err != nil {
+		return nil, err
+	}
+	var s Slot
+	if err := json.Unmarshal(rb, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// PatchSlot updates fields on a slot record.
+func (c *PBClient) PatchSlot(ctx context.Context, id string, fields map[string]any) error {
+	body, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	_, err = c.do(ctx, http.MethodPatch, "/api/collections/slots/records/"+url.PathEscape(id), body, true)
+	return err
+}
+
+// InvalidateSlotState evicts a username from the slot-state cache (call after a
+// state-changing operation).
+func (c *PBClient) InvalidateSlotState(username string) {
+	c.stateMu.Lock()
+	delete(c.stateData, username)
+	c.stateMu.Unlock()
 }
 
 // GroupName resolves a slot's group display name (denormalised field, else a

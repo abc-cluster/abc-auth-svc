@@ -33,13 +33,16 @@ const (
 	DefaultHubPublicURL     = "https://workbench.seedling.abc-cluster.cloud"
 
 	// PocketBase + cluster defaults (env-driven in production; Nomad injects them).
-	DefaultPocketBaseURL        = "http://127.0.0.1:8091"
-	DefaultPBAdminEmail         = "abc-auth@internal"
-	DefaultClusterNomadEndpoint = "https://nomad.seedling.abc-cluster.cloud"
-	DefaultClusterMinioEndpoint = "https://s3.seedling.abc-cluster.cloud"
-	DefaultClusterDatacenter    = "seedling-prod"
-	DefaultClusterHeadPool      = "platform"
-	DefaultClusterWorkerPool    = "compute"
+	DefaultPocketBaseURL         = "http://127.0.0.1:8091"
+	DefaultPBAdminEmail          = "abc-auth@internal"
+	DefaultClusterNomadEndpoint  = "https://nomad.seedling.abc-cluster.cloud"
+	DefaultClusterMinioEndpoint  = "https://s3.seedling.abc-cluster.cloud"
+	DefaultClusterDatacenter     = "seedling-prod"
+	DefaultClusterHeadPool       = "platform"
+	DefaultClusterWorkerPool     = "compute"
+	DefaultClusterName           = "seedling"
+	DefaultClusterUploadEndpoint = "https://upload.seedling.abc-cluster.cloud/files/"
+	DefaultClusterAuthEndpoint   = "https://workbench.seedling.abc-cluster.cloud"
 
 	defaultReadTimeout   = 10 * time.Second
 	defaultWriteTimeout  = 15 * time.Second
@@ -66,14 +69,20 @@ type Config struct {
 	HubPublicURL         string
 
 	// PocketBase (slot store) + cluster identity for the credential bundle.
-	PocketBaseURL        string
-	PBAdminEmail         string
-	PBAdminPassword      string
-	ClusterNomadEndpoint string
-	ClusterMinioEndpoint string
-	ClusterDatacenter    string
-	ClusterHeadPool      string
-	ClusterWorkerPool    string
+	PocketBaseURL         string
+	PBAdminEmail          string
+	PBAdminPassword       string
+	ClusterNomadEndpoint  string
+	ClusterMinioEndpoint  string
+	ClusterDatacenter     string
+	ClusterHeadPool       string
+	ClusterWorkerPool     string
+	ClusterName           string
+	ClusterUploadEndpoint string
+	ClusterAuthEndpoint   string
+
+	// OperatorToken gates /manage/* (X-Operator-Token). Secret — env only.
+	OperatorToken string
 
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
@@ -136,6 +145,10 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.ClusterDatacenter = getenvOr(getenv, "CLUSTER_DATACENTER", DefaultClusterDatacenter)
 	cfg.ClusterHeadPool = getenvOr(getenv, "CLUSTER_HEAD_POOL", DefaultClusterHeadPool)
 	cfg.ClusterWorkerPool = getenvOr(getenv, "CLUSTER_WORKER_POOL", DefaultClusterWorkerPool)
+	cfg.ClusterName = getenvOr(getenv, "CLUSTER_NAME", DefaultClusterName)
+	cfg.ClusterUploadEndpoint = getenvOr(getenv, "CLUSTER_UPLOAD_ENDPOINT", DefaultClusterUploadEndpoint)
+	cfg.ClusterAuthEndpoint = getenvOr(getenv, "CLUSTER_AUTH_ENDPOINT", DefaultClusterAuthEndpoint)
+	cfg.OperatorToken = strings.TrimSpace(getenv("OPERATOR_TOKEN")) // secret: env only
 
 	fs := flag.NewFlagSet("abc-auth-svc", flag.ContinueOnError)
 	listen := fs.String("listen", cfg.ListenAddr, "listen address (host:port)")
@@ -162,7 +175,7 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.HubPublicURL = *hubPublicURL
 
 	// Secrets feed the exact-value log scrub.
-	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword} {
+	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword, cfg.OperatorToken} {
 		if sec != "" {
 			cfg.ScrubSecrets = append(cfg.ScrubSecrets, sec)
 		}
