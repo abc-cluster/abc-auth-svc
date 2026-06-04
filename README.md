@@ -15,11 +15,17 @@ migration.
 
 📖 See [USAGE.md](USAGE.md) for running, flags, and the log format.
 
-> **Status: Phase 0 (skeleton).** Stdlib HTTP server, redacting JSON access
-> logging, `/healthz` + `/readyz` + `/version`, graceful shutdown. No upstreams
-> (PocketBase / JupyterHub / MinIO / Nomad) are wired yet — those land in
-> Phases 1–4. The migration plan lives in the abc-universe knowledge repo at
-> `brainstorms/abc-workbench/2026-06-04-auth-svc-go-rewrite-plan-v2.md`.
+> **Status: Phases 0–3-core implemented; DEPLOYED on aither, shadow run live.**
+> Ported endpoints: `/healthz` `/readyz` `/version`; `/validate` `/validate-optional`
+> `/validate-shadow` (forward-auth + parity harness); `/auth/login` `/auth/logout`
+> `/auth/me`; `/auth/workbench/token`; `/auth/exchange`; `/slots/me/config`;
+> `/manage/slots/{slot}/cred-source`. Running as Nomad job `abc-auth-svc-go` on
+> **:4182** beside the Python service on **:4181**; shadow comparison of `/validate`
+> is **4/4 agree** (HMAC `abc_session` cross-compatible with the Python).
+> **Pending:** wire `PB_ADMIN_PASSWORD` for full slot-state parity, then the Caddy
+> cutover; **Phase 3b** (magic-links, MinIO SSO, role-based group expansion) and
+> **Phase 4** (remaining `/manage/*`, `/slots/claim`, `/verify*`). Migration plan:
+> abc-universe `brainstorms/abc-workbench/2026-06-04-auth-svc-go-rewrite-plan-v2.md`.
 
 ---
 
