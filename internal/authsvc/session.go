@@ -86,6 +86,23 @@ func decodeB64URL(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
 
+// setSessionCookie emits the abc_session cookie at login.
+func setSessionCookie(w http.ResponseWriter, cfg Config, token string) {
+	c := &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int(cfg.SessionTTL.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   cfg.CookieSecure,
+	}
+	if cfg.CookieDomain != "" {
+		c.Domain = cfg.CookieDomain
+	}
+	http.SetCookie(w, c)
+}
+
 // clearSessionCookie emits a Set-Cookie that deletes the abc_session cookie.
 func clearSessionCookie(w http.ResponseWriter, cfg Config) {
 	c := &http.Cookie{

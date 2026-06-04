@@ -26,6 +26,7 @@ type Upstreams struct {
 	Nomad        NomadValidator
 	Hub          HubMinter
 	Store        SlotStore
+	Minio        MinIOValidator
 	Cluster      ClusterInfo
 	HubPublicURL string
 }
@@ -49,6 +50,7 @@ func BuildUpstreams(cfg Config) Upstreams {
 			Nomad:        mockNomad{},
 			Hub:          mockHub{},
 			Store:        mockStore{},
+			Minio:        mockMinio{},
 			Cluster:      cluster,
 			HubPublicURL: cfg.HubPublicURL,
 		}
@@ -57,6 +59,7 @@ func BuildUpstreams(cfg Config) Upstreams {
 		Nomad:        &NomadClient{Addr: cfg.NomadAddr, HTTP: &http.Client{Timeout: 5 * time.Second}},
 		Hub:          &HubClient{APIURL: cfg.JupyterHubAPIURL, AdminToken: cfg.JupyterHubAdminToken, HTTP: &http.Client{Timeout: 10 * time.Second}},
 		Store:        NewPBClient(cfg.PocketBaseURL, cfg.PBAdminEmail, cfg.PBAdminPassword, &http.Client{Timeout: 10 * time.Second}),
+		Minio:        &ConsoleValidator{ConsoleURL: cfg.MinioConsoleURL, HTTP: &http.Client{Timeout: 8 * time.Second}},
 		Cluster:      cluster,
 		HubPublicURL: cfg.HubPublicURL,
 	}

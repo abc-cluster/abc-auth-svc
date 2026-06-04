@@ -46,6 +46,11 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	mux.HandleFunc("GET /validate", s.handleValidate)
 	mux.HandleFunc("GET /validate-optional", s.handleValidateOptional)
 	mux.HandleFunc("GET /validate-shadow", s.handleValidateShadow)
+	// Auth flows (browser + CLI).
+	mux.HandleFunc("GET /auth/login", s.handleLoginGet)
+	mux.HandleFunc("POST /auth/login", s.handleLoginPost)
+	mux.HandleFunc("GET /auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /auth/me", s.handleAuthMe)
 	// Caddy serves abc-auth-svc under /auth/* and strips the prefix, so the
 	// Python service sees /workbench/token. Register both so the Go service works
 	// whether or not the per-path Caddy rule strips /auth.

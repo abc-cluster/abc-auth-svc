@@ -81,6 +81,7 @@ type Config struct {
 	ClusterName           string
 	ClusterUploadEndpoint string
 	ClusterAuthEndpoint   string
+	MinioConsoleURL       string
 
 	// OperatorToken gates /manage/* (X-Operator-Token). Secret — env only.
 	OperatorToken string
@@ -159,6 +160,7 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.ClusterUploadEndpoint = getenvOr(getenv, "CLUSTER_UPLOAD_ENDPOINT", DefaultClusterUploadEndpoint)
 	cfg.ClusterAuthEndpoint = getenvOr(getenv, "CLUSTER_AUTH_ENDPOINT", DefaultClusterAuthEndpoint)
 	cfg.OperatorToken = strings.TrimSpace(getenv("OPERATOR_TOKEN")) // secret: env only
+	cfg.MinioConsoleURL = getenvOr(getenv, "MINIO_CONSOLE_URL", "http://localhost:9001")
 
 	// Session / cookie / shadow.
 	cfg.SessionSecret = getenv("SESSION_SECRET") // secret: env only (not trimmed — preserve exact key bytes)
