@@ -1,0 +1,26 @@
+# Build artifacts
+/abc-auth-svc
+/abc-auth-svc-linux-amd64
+/abc-auth-svc-linux-arm64
+/abc-auth-svc-darwin-amd64
+/abc-auth-svc-darwin-arm64
+/dist/
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test and coverage
+*.out
+coverage.html
+*.coverprofile
+
+# OS specific
+Thumbs.db
+
+# Development
+.claude
