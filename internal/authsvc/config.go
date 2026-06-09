@@ -65,9 +65,15 @@ type Config struct {
 	// secrets — env only, never flags — and are added to ScrubSecrets so they can
 	// never appear in logs.
 	NomadAddr            string
+	NomadAdminToken      string // operator-tier; secret env only (NOMAD_TOKEN)
 	JupyterHubAPIURL     string
 	JupyterHubAdminToken string
 	HubPublicURL         string
+
+	// MinIO admin shellout — Python uses /usr/local/bin/mcli with alias sdroot;
+	// override via MCLI_BIN / MCLI_ALIAS for local dev (no env files on aither).
+	MCLIBinary string
+	MCLIAlias  string
 
 	// PocketBase (slot store) + cluster identity for the credential bundle.
 	PocketBaseURL         string
@@ -150,6 +156,9 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 		cfg.HubPublicURL = v
 	}
 	cfg.JupyterHubAdminToken = strings.TrimSpace(getenv("JUPYTERHUB_API_TOKEN")) // secret: env only
+	cfg.NomadAdminToken = strings.TrimSpace(getenv("NOMAD_TOKEN"))               // secret: env only
+	cfg.MCLIBinary = getenvOr(getenv, "MCLI_BIN", "/usr/local/bin/mcli")
+	cfg.MCLIAlias = getenvOr(getenv, "MCLI_ALIAS", "sdroot")
 
 	// PocketBase + cluster config — env with defaults (no flags; Nomad injects).
 	cfg.PocketBaseURL = getenvOr(getenv, "POCKETBASE_URL", DefaultPocketBaseURL)
@@ -212,7 +221,7 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.HubPublicURL = *hubPublicURL
 
 	// Secrets feed the exact-value log scrub.
-	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword, cfg.OperatorToken, cfg.SessionSecret} {
+	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword, cfg.OperatorToken, cfg.SessionSecret, cfg.NomadAdminToken} {
 		if sec != "" {
 			cfg.ScrubSecrets = append(cfg.ScrubSecrets, sec)
 		}

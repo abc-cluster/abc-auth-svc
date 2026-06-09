@@ -90,6 +90,19 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	mux.HandleFunc("GET /auth/manage/slots/{slot}", s.handleManageGetSlot)
 	// /healthz alias for Python compatibility.
 	mux.HandleFunc("GET /auth/health", s.handleHealthz)
+	// Phase 4 — fully Go-served as of cutover finalisation.
+	mux.HandleFunc("POST /auth/secrets/put", s.handleSecretsPut)
+	mux.HandleFunc("POST /secrets/put", s.handleSecretsPut)
+	mux.HandleFunc("POST /auth/secrets/get", s.handleSecretsGet)
+	mux.HandleFunc("POST /secrets/get", s.handleSecretsGet)
+	mux.HandleFunc("POST /slots/claim", s.handleSlotsClaim)
+	mux.HandleFunc("POST /auth/slots/claim", s.handleSlotsClaim)
+	mux.HandleFunc("POST /manage/slots/{slot}/suspend", s.handleManageSuspend)
+	mux.HandleFunc("POST /auth/manage/slots/{slot}/suspend", s.handleManageSuspend)
+	mux.HandleFunc("POST /manage/slots/{slot}/reactivate", s.handleManageReactivate)
+	mux.HandleFunc("POST /auth/manage/slots/{slot}/reactivate", s.handleManageReactivate)
+	mux.HandleFunc("POST /manage/slots/{slot}/rotate", s.handleManageRotate)
+	mux.HandleFunc("POST /auth/manage/slots/{slot}/rotate", s.handleManageRotate)
 	mux.HandleFunc("/", s.handleNotFound)
 
 	handler := chain(mux,

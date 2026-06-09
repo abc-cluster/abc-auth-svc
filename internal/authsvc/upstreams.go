@@ -24,9 +24,11 @@ type ClusterInfo struct {
 // into the server so tests can substitute mocks.
 type Upstreams struct {
 	Nomad        NomadValidator
+	NomadAdmin   NomadAdmin // operator-tier: Variables KV + ACL token mint/delete
 	Hub          HubMinter
 	Store        SlotStore
 	Minio        MinIOValidator
+	MinioAdmin   MinIOAdmin // operator-tier: rotate / enable / disable
 	Cluster      ClusterInfo
 	HubPublicURL string
 }
@@ -48,24 +50,46 @@ func BuildUpstreams(cfg Config) Upstreams {
 	if cfg.MockUpstreams {
 		return Upstreams{
 			Nomad:        mockNomad{},
+			NomadAdmin:   mockNomadAdmin{},
 			Hub:          mockHub{},
 			Store:        mockStore{},
 			Minio:        mockMinio{},
+			MinioAdmin:   mockMinioAdmin{},
 			Cluster:      cluster,
 			HubPublicURL: cfg.HubPublicURL,
 		}
 	}
+	nomadHTTP := &http.Client{Timeout: 5 * time.Second}
+	nomadClient := &NomadClient{Addr: cfg.NomadAddr, HTTP: nomadHTTP}
 	return Upstreams{
-		Nomad:        &NomadClient{Addr: cfg.NomadAddr, HTTP: &http.Client{Timeout: 5 * time.Second}},
+		Nomad:        nomadClient,
+		NomadAdmin:   &AdminClient{NomadClient: nomadClient, AdminToken: cfg.NomadAdminToken},
 		Hub:          &HubClient{APIURL: cfg.JupyterHubAPIURL, AdminToken: cfg.JupyterHubAdminToken, HTTP: &http.Client{Timeout: 10 * time.Second}},
 		Store:        NewPBClient(cfg.PocketBaseURL, cfg.PBAdminEmail, cfg.PBAdminPassword, &http.Client{Timeout: 10 * time.Second}),
 		Minio:        &ConsoleValidator{ConsoleURL: cfg.MinioConsoleURL, HTTP: &http.Client{Timeout: 8 * time.Second}},
+		MinioAdmin:   &MCAdmin{Binary: cfg.MCLIBinary, AliasName: cfg.MCLIAlias},
 		Cluster:      cluster,
 		HubPublicURL: cfg.HubPublicURL,
 	}
 }
 
 // ── Mock upstreams (deterministic; --mock-upstreams) ──────────────────────────
+
+// mockNomadAdmin: deterministic responses for local dev / contributor tests.
+// Each mint produces a synthetic accessor/secret pair; Variables persist in
+// an in-process map; DeleteToken / SetEnabled are no-ops.
+type mockNomadAdmin struct{}
+
+func (mockNomadAdmin) VarGet(_ context.Context, _, _ string) (string, error) {
+	return "", ErrVarNotFound
+}
+func (mockNomadAdmin) VarPut(_ context.Context, _, _, _ string) error { return nil }
+func (mockNomadAdmin) CreateToken(_ context.Context, slot, _ string) (string, string, error) {
+	return "mock-accessor-" + slot, "mock-secret-" + slot, nil
+}
+func (mockNomadAdmin) DeleteToken(_ context.Context, _ string) error          { return nil }
+func (mockNomadAdmin) GetRoleID(_ context.Context, _ string) (string, error)  { return "mock-role", nil }
+
 
 type mockNomad struct{}
 

@@ -113,6 +113,35 @@ func (c *HubClient) MintUserToken(ctx context.Context, user, note string, expire
 	return &out, nil
 }
 
+// StopServer terminates a running JupyterHub server for user, returning nil
+// when the spawn is stopped (204) or already stopped (404). Mirrors the
+// Python _jh_stop_server best-effort semantics — used by /manage/slots/rotate
+// and /manage/slots/suspend so a still-running server doesn't keep serving
+// content under the rotated MinIO secret.
+func (c *HubClient) StopServer(ctx context.Context, user string) error {
+	if strings.TrimSpace(c.AdminToken) == "" {
+		return errors.New("JUPYTERHUB_API_TOKEN not configured")
+	}
+	endpoint := strings.TrimRight(c.APIURL, "/") + "/users/" + url.PathEscape(user) + "/server"
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "token "+c.AdminToken)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusAccepted, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	default:
+		return fmt.Errorf("jh stop-server: HTTP %d", resp.StatusCode)
+	}
+}
+
 // UserExists probes GET {APIURL}/users/<user> with the admin token. Returns
 // (*bool, nil) where deref tells you yes/no on a definitive 200/404, or
 // (nil, err) when the Hub is unreachable / auth fails. Used by handlers to
