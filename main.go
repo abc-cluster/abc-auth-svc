@@ -57,11 +57,13 @@ func run() error {
 		return nil
 	}
 
-	logger := authsvc.NewLogger(os.Stderr, cfg.LogLevel, cfg.ScrubSecrets)
+	logger, levelVar := authsvc.NewLeveledLogger(os.Stderr, cfg.LogLevel, cfg.ScrubSecrets)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	up := authsvc.BuildUpstreams(cfg)
-	return authsvc.NewServer(cfg, logger, build, up).Run(ctx)
+	up := authsvc.BuildUpstreams(cfg, logger)
+	srv := authsvc.NewServer(cfg, logger, build, up)
+	srv.SetLevelVar(levelVar) // enables runtime POST /manage/log-level
+	return srv.Run(ctx)
 }

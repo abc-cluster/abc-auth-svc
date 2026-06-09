@@ -2,6 +2,7 @@ package authsvc
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -35,8 +36,11 @@ type Upstreams struct {
 
 // BuildUpstreams constructs the real upstream clients from config — or
 // deterministic mocks when --mock-upstreams is set (local dev / contributor
-// testing without a live cluster).
-func BuildUpstreams(cfg Config) Upstreams {
+// testing without a live cluster). The logger is threaded into every real
+// upstream http.Client via debugRoundTripper, so L3 (trace) emits one record
+// per upstream call (method/host/path/status/ms, rid-correlated). Pass nil to
+// skip the tracer.
+func BuildUpstreams(cfg Config, logger *slog.Logger) Upstreams {
 	cluster := ClusterInfo{
 		Name:           cfg.ClusterName,
 		NomadEndpoint:  cfg.ClusterNomadEndpoint,
@@ -59,14 +63,22 @@ func BuildUpstreams(cfg Config) Upstreams {
 			HubPublicURL: cfg.HubPublicURL,
 		}
 	}
-	nomadHTTP := &http.Client{Timeout: 5 * time.Second}
+	// trace wraps an http.Client's transport with the L3 upstream tracer when
+	// a logger is supplied; a no-op otherwise.
+	trace := func(c *http.Client) *http.Client {
+		if logger != nil {
+			return withDebugTransport(c, logger)
+		}
+		return c
+	}
+	nomadHTTP := trace(&http.Client{Timeout: 5 * time.Second})
 	nomadClient := &NomadClient{Addr: cfg.NomadAddr, HTTP: nomadHTTP}
 	return Upstreams{
 		Nomad:        nomadClient,
 		NomadAdmin:   &AdminClient{NomadClient: nomadClient, AdminToken: cfg.NomadAdminToken},
-		Hub:          &HubClient{APIURL: cfg.JupyterHubAPIURL, AdminToken: cfg.JupyterHubAdminToken, HTTP: &http.Client{Timeout: 10 * time.Second}},
-		Store:        NewPBClient(cfg.PocketBaseURL, cfg.PBAdminEmail, cfg.PBAdminPassword, &http.Client{Timeout: 10 * time.Second}),
-		Minio:        &ConsoleValidator{ConsoleURL: cfg.MinioConsoleURL, HTTP: &http.Client{Timeout: 8 * time.Second}},
+		Hub:          &HubClient{APIURL: cfg.JupyterHubAPIURL, AdminToken: cfg.JupyterHubAdminToken, HTTP: trace(&http.Client{Timeout: 10 * time.Second})},
+		Store:        NewPBClient(cfg.PocketBaseURL, cfg.PBAdminEmail, cfg.PBAdminPassword, trace(&http.Client{Timeout: 10 * time.Second})),
+		Minio:        &ConsoleValidator{ConsoleURL: cfg.MinioConsoleURL, HTTP: trace(&http.Client{Timeout: 8 * time.Second})},
 		MinioAdmin:   &MCAdmin{Binary: cfg.MCLIBinary, AliasName: cfg.MCLIAlias},
 		Cluster:      cluster,
 		HubPublicURL: cfg.HubPublicURL,

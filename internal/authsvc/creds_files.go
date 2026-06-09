@@ -11,7 +11,10 @@ import (
 // with AWS_* vars. abc-config file: /etc/jupyterhub/abc-configs/<slot> —
 // dropped into $HOME/.abc/config.yaml on first spawn so the abc CLI inside
 // the workbench has ambient auth.
-const (
+//
+// Package vars (not consts) so tests can redirect them at a t.TempDir()
+// instead of touching the host /etc. Production never reassigns them.
+var (
 	credsDir     = "/etc/jupyterhub/minio-creds"
 	abcConfigDir = "/etc/jupyterhub/abc-configs"
 )

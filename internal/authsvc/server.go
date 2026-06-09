@@ -17,10 +17,17 @@ type Server struct {
 	up           Upstreams
 	session      sessionVerifier
 	codes        *magicCodeStore
+	levelVar     *slog.LevelVar // runtime log-level control; nil = fixed level
 	shadowURL    string
 	shadowClient *http.Client
 	http         *http.Server
 }
+
+// SetLevelVar wires the logger's runtime-mutable level into the server so
+// POST /manage/log-level can change it without a restart. Called once by
+// main.go after NewLeveledLogger. When nil (tests), the log-level endpoint
+// reports the static level and refuses to change it.
+func (s *Server) SetLevelVar(lv *slog.LevelVar) { s.levelVar = lv }
 
 // NewServer builds the server with its middleware chain and routes.
 //
@@ -103,6 +110,12 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	mux.HandleFunc("POST /auth/manage/slots/{slot}/reactivate", s.handleManageReactivate)
 	mux.HandleFunc("POST /manage/slots/{slot}/rotate", s.handleManageRotate)
 	mux.HandleFunc("POST /auth/manage/slots/{slot}/rotate", s.handleManageRotate)
+	// Runtime log-level control (operator-gated) — flip to debug/trace to
+	// capture an issue live, then flip back, without restarting the service.
+	mux.HandleFunc("GET /manage/log-level", s.handleLogLevel)
+	mux.HandleFunc("POST /manage/log-level", s.handleLogLevel)
+	mux.HandleFunc("GET /auth/manage/log-level", s.handleLogLevel)
+	mux.HandleFunc("POST /auth/manage/log-level", s.handleLogLevel)
 	mux.HandleFunc("/", s.handleNotFound)
 
 	handler := chain(mux,

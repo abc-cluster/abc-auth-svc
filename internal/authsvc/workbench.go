@@ -68,12 +68,22 @@ func (s *Server) handleWorkbenchToken(w http.ResponseWriter, r *http.Request) {
 	// matching that pattern is "slot-calm_dassie" predating 2026-05-28. See
 	// abc-universe/brainstorms/abc-workbench/2026-06-09-workbench-connect-and-spawn-failures.md.
 	var jhUser, abcUser string
-	if strings.HasPrefix(rawName, "pool-") {
+	pooled := strings.HasPrefix(rawName, "pool-")
+	if pooled {
 		bare := strings.TrimPrefix(rawName, "pool-")
 		jhUser, abcUser = bare, bare
 	} else {
 		jhUser, abcUser = rawName, rawName
 	}
+	// THE Bug-A decision point: log the raw token Name → derived jh_user
+	// mapping at L2. When the 2026-06-09 mint 403 recurs (or a future naming
+	// migration desyncs again), this single record shows whether the mint is
+	// targeting the right JH user without an alloc-exec + journalctl hunt.
+	log.LogAttrs(ctx, L2, "workbench.token.derive_user",
+		slog.String("raw_name", rawName),
+		slog.Bool("pooled", pooled),
+		slog.String("jh_user", jhUser),
+		slog.String("abc_user", abcUser))
 
 	// Block suspended/expired slots from minting (defence in depth — JH itself
 	// has no slot-state model). Keyed on minio_access_key == the bare abc user.

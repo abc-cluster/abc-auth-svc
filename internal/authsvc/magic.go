@@ -210,17 +210,27 @@ func (s *Server) handleAuthRedeem(w http.ResponseWriter, r *http.Request) {
 	// Decide the post-redeem redirect target.
 	portal := entry.Extra["portal"]
 	host := r.Host
-	var dest string
+	var dest, destReason string
 	switch {
 	case portal == "grafana" || strings.Contains(host, "grafana."):
 		// Grafana needs /login to force auth-proxy re-evaluation, otherwise
 		// it serves the cached anonymous session.
-		dest = "/login"
+		dest, destReason = "/login", "grafana"
 	case entry.NextURL != "" && isTrustedRedirect(entry.NextURL):
-		dest = entry.NextURL
+		dest, destReason = entry.NextURL, "trusted_absolute"
 	default:
-		dest = safeNext(entry.NextURL)
+		dest, destReason = safeNext(entry.NextURL), "safe_next"
 	}
+	// L2: which redirect branch + whether a minio_token rode along. The portal
+	// SSO flows are the ones that mis-redirect when next/host disagree; this
+	// makes the branch chosen explicit per rid.
+	_, hasMinioToken := entry.Extra["minio_token"]
+	log.LogAttrs(ctx, L2, "cli_token.redeem_decide",
+		slog.String("user", entry.Username),
+		slog.String("portal", portal),
+		slog.String("dest_reason", destReason),
+		slog.String("dest", dest),
+		slog.Bool("has_minio_token", hasMinioToken))
 
 	tok := s.session.make(entry.Username, s.cfg.SessionTTL)
 	setSessionCookie(w, s.cfg, tok)

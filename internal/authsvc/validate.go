@@ -19,19 +19,35 @@ type validateVerdict struct {
 
 // decideValidate computes the forward-auth verdict from the request's session
 // cookie + slot state. No I/O beyond the (cached) slot-state lookup.
+//
+// The L2 records here trace the exact branch each request takes — the
+// information that would have made the "why is Remote-User <x> / why 302"
+// questions a one-line log read. Each notes whether the cookie was present,
+// whether the HMAC verified, the resolved username, and the slot state.
 func (s *Server) decideValidate(ctx context.Context, r *http.Request) validateVerdict {
+	log := FromContext(ctx)
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil || c.Value == "" {
+		log.LogAttrs(ctx, L2, "validate.decide", slog.String("result", "no_cookie"))
 		return validateVerdict{}
 	}
 	username, ok := s.session.verify(c.Value)
 	if !ok {
+		log.LogAttrs(ctx, L2, "validate.decide", slog.String("result", "bad_signature"))
 		return validateVerdict{}
 	}
 	state := s.slotState(ctx, username)
 	if state == "suspended" || state == "expired" {
+		log.LogAttrs(ctx, L2, "validate.decide",
+			slog.String("result", "blocked"),
+			slog.String("user", username),
+			slog.String("state", state))
 		return validateVerdict{denyState: state, clearCookie: true}
 	}
+	log.LogAttrs(ctx, L2, "validate.decide",
+		slog.String("result", "allow"),
+		slog.String("user", username),
+		slog.String("state", state))
 	return validateVerdict{allow: true, user: username}
 }
 
