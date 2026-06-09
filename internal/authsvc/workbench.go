@@ -59,12 +59,18 @@ func (s *Server) handleWorkbenchToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Derive the JupyterHub username.
-	//   pool token  Name="pool-<x>"  → jh_user "slot-<x>"
+	//   pool token  Name="pool-<x>"  → jh_user "<x>" (bare; matches Caddy Remote-User)
 	//   named token Name="<x>"       → jh_user verbatim
+	//
+	// Caddy's /validate response sets Remote-User: <bare>, and JH's HeaderAuthenticator
+	// creates / matches the JH user under that bare name; the mint target MUST match.
+	// Historically the pool branch constructed "slot-<bare>"; the only legacy user
+	// matching that pattern is "slot-calm_dassie" predating 2026-05-28. See
+	// abc-universe/brainstorms/abc-workbench/2026-06-09-workbench-connect-and-spawn-failures.md.
 	var jhUser, abcUser string
 	if strings.HasPrefix(rawName, "pool-") {
 		bare := strings.TrimPrefix(rawName, "pool-")
-		jhUser, abcUser = "slot-"+bare, bare
+		jhUser, abcUser = bare, bare
 	} else {
 		jhUser, abcUser = rawName, rawName
 	}
@@ -120,9 +126,41 @@ func (s *Server) handleWorkbenchToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var he *HubError
 		if errors.As(err, &he) && he.Kind == hubHTTPError {
-			log.LogAttrs(ctx, L1, "workbench.token.mint_failed",
-				slog.String("user", jhUser), slog.Int("hub_status", he.Status))
-			errJSON(w, http.StatusBadGateway, he.Error())
+			// Classify 403 / 404 by probing whether the JH user exists.
+			// One cheap GET disambiguates the three actual causes (wrong
+			// name vs scope too narrow vs hub unreachable) — saves the
+			// "alloc-exec + journalctl + ssh" hunts the 2026-06-09 mint
+			// bug forced.
+			diag := ""
+			if he.Status == http.StatusForbidden || he.Status == http.StatusNotFound {
+				if ex, ok := s.up.Hub.(HubUserExister); ok {
+					exists, probeErr := ex.UserExists(ctx, jhUser)
+					switch {
+					case probeErr != nil:
+						diag = "jh-user-probe-failed"
+					case exists != nil && !*exists:
+						diag = "jh-user-not-found"
+					case exists != nil && *exists:
+						diag = "jh-scope-or-token-issue"
+					}
+				}
+			}
+			attrs := []slog.Attr{
+				slog.String("user", jhUser),
+				slog.Int("hub_status", he.Status),
+			}
+			if diag != "" {
+				attrs = append(attrs, slog.String("diag", diag))
+			}
+			log.LogAttrs(ctx, L1, "workbench.token.mint_failed", attrs...)
+			body := map[string]any{
+				"error": he.Error(),
+				"hint":  "GET /manage/slots/" + abcUser + "/diag (operator-gated) for a structured readiness report.",
+			}
+			if diag != "" {
+				body["diag"] = diag
+			}
+			writeJSON(w, http.StatusBadGateway, body)
 			return
 		}
 		log.LogAttrs(ctx, L1, "workbench.token.hub_unreachable",

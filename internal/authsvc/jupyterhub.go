@@ -21,9 +21,20 @@ type JHToken struct {
 	Note      string   `json:"note"`
 }
 
-// HubMinter mints a JupyterHub user token for a given JH username.
+// HubMinter mints a JupyterHub user token for a given JH username; the
+// optional Exister probe distinguishes "user not in JH" from "scope too
+// narrow" / "admin token bad" on a mint 403/404 (mirrors the Python
+// service's _jh_user_exists helper).
 type HubMinter interface {
 	MintUserToken(ctx context.Context, user, note string, expiresIn int64) (*JHToken, error)
+}
+
+// HubUserExister optionally extends HubMinter with a cheap user-existence
+// probe. Implementations may return (nil, err) on unreachable hub or
+// transport failures. A non-nil bool result is authoritative (true=exists,
+// false=404 from JH).
+type HubUserExister interface {
+	UserExists(ctx context.Context, user string) (*bool, error)
 }
 
 // hubErrorKind distinguishes a JupyterHub HTTP-status error (→ 502) from an
@@ -100,4 +111,39 @@ func (c *HubClient) MintUserToken(ctx context.Context, user, note string, expire
 		return nil, err
 	}
 	return &out, nil
+}
+
+// UserExists probes GET {APIURL}/users/<user> with the admin token. Returns
+// (*bool, nil) where deref tells you yes/no on a definitive 200/404, or
+// (nil, err) when the Hub is unreachable / auth fails. Used by handlers to
+// classify a mint 403/404 into the three real causes (wrong name vs scope
+// too narrow vs hub unreachable) — saves journal-grovelling on incidents
+// like the 2026-06-09 mint-bug hunt.
+func (c *HubClient) UserExists(ctx context.Context, user string) (*bool, error) {
+	if strings.TrimSpace(c.AdminToken) == "" {
+		return nil, errors.New("JUPYTERHUB_API_TOKEN not configured")
+	}
+	endpoint := strings.TrimRight(c.APIURL, "/") + "/users/" + url.PathEscape(user)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+c.AdminToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body) // drain so the conn can be reused
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		ok := true
+		return &ok, nil
+	case resp.StatusCode == http.StatusNotFound:
+		no := false
+		return &no, nil
+	default:
+		return nil, fmt.Errorf("jh user probe HTTP %d", resp.StatusCode)
+	}
 }

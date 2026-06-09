@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -65,6 +66,8 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	mux.HandleFunc("GET /auth/slots/me/config", s.handleSlotsMeConfig)
 	mux.HandleFunc("POST /manage/slots/{slot}/cred-source", s.handleCredSource)
 	mux.HandleFunc("POST /auth/manage/slots/{slot}/cred-source", s.handleCredSource)
+	mux.HandleFunc("GET /manage/slots/{slot}/diag", s.handleSlotDiag)
+	mux.HandleFunc("GET /auth/manage/slots/{slot}/diag", s.handleSlotDiag)
 	mux.HandleFunc("/", s.handleNotFound)
 
 	handler := chain(mux,
@@ -91,9 +94,71 @@ func (s *Server) Handler() http.Handler { return s.http.Handler }
 // Addr returns the configured listen address.
 func (s *Server) Addr() string { return s.http.Addr }
 
+// logStartupBanner emits a structured summary of upstream config (URLs +
+// token shapes + reachability) at L1 on startup. Mirrors the Python
+// service's banner (lines 2557+) so both drift surfaces from the
+// project_authsvc_deploy_drift memory (placeholder admin token, Hub URL
+// mismatch) self-announce on every alloc restart.
+func (s *Server) logStartupBanner(ctx context.Context) {
+	// Token shape — never log the secret, only its length + 8-char prefix +
+	// placeholder/unset flags. Same approach as the Python service.
+	jhTok := s.cfg.JupyterHubAdminToken
+	jhTokState, jhTokPrefix := tokenShape(jhTok)
+
+	s.log.LogAttrs(ctx, L1, "server.startup.config",
+		slog.String("listen", s.cfg.ListenAddr),
+		slog.String("jupyterhub_api_url", s.cfg.JupyterHubAPIURL),
+		slog.String("jupyterhub_admin_token", jhTokState),
+		slog.String("jupyterhub_admin_token_prefix", jhTokPrefix),
+		slog.Int("jupyterhub_admin_token_len", len(jhTok)),
+		slog.String("nomad_addr", s.cfg.NomadAddr),
+		slog.String("pocketbase_url", s.cfg.PocketBaseURL),
+		slog.String("minio_console_url", s.cfg.MinioConsoleURL),
+	)
+
+	// Quick reachability probe for JH — distinguishes "Hub down/wrong URL"
+	// from "Hub up but admin token rejected". Fails open: never blocks
+	// startup.
+	if ex, ok := s.up.Hub.(HubUserExister); ok {
+		ctxProbe, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		// Probe with a sentinel user that won't exist — JH still answers
+		// 200 (with auth) or 404 (auth OK, user not found); both indicate
+		// the Hub is up and our admin token works. A non-2xx/4xx (e.g.
+		// transport error) indicates Hub unreachable.
+		if _, probeErr := ex.UserExists(ctxProbe, "__diag_probe__"); probeErr != nil {
+			s.log.LogAttrs(ctx, L1, "server.startup.jupyterhub_probe",
+				slog.String("status", "unreachable_or_unauthorized"),
+				slog.String("error", probeErr.Error()))
+		} else {
+			s.log.LogAttrs(ctx, L1, "server.startup.jupyterhub_probe",
+				slog.String("status", "reachable"))
+		}
+	}
+}
+
+// tokenShape returns a (state, prefix) pair for non-secret logging.
+//   - "unset" / "(empty)" — token blank
+//   - "placeholder" / "REPLACE_…"  — install script never substituted it
+//   - "set" / first 8 chars         — looks real
+func tokenShape(tok string) (state, prefix string) {
+	switch {
+	case tok == "":
+		return "unset", "(empty)"
+	case strings.Contains(tok, "REPLACE_WITH"):
+		return "placeholder", tok
+	default:
+		if len(tok) >= 8 {
+			return "set", tok[:8]
+		}
+		return "set", tok
+	}
+}
+
 // Run starts the server and blocks until ctx is cancelled, then gracefully shuts
 // down within the configured grace window.
 func (s *Server) Run(ctx context.Context) error {
+	s.logStartupBanner(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		s.log.LogAttrs(ctx, L1, "server.listening",

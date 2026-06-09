@@ -119,6 +119,12 @@ func TestWorkbenchToken_EmptyName(t *testing.T) {
 	}
 }
 
+// TestWorkbenchToken_PoolSlotDerivation_BareName is the regression test for the
+// 2026-06-09 mint bug: pool-<bare> Nomad tokens MUST mint against JH user
+// "<bare>", not "slot-<bare>". Caddy's /validate response sets Remote-User
+// to "<bare>", JH's HeaderAuthenticator creates the user under that name, so
+// the mint target must match. (Prior to the fix the pool branch constructed
+// "slot-<bare>" and JH 403'd "Service slot-<bare> not found".)
 func TestWorkbenchToken_PoolSlotDerivation(t *testing.T) {
 	hub := okHub()
 	s, _ := wbServer(t, okNomad("pool-calm_dassie"), hub)
@@ -130,11 +136,12 @@ func TestWorkbenchToken_PoolSlotDerivation(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Slot != "slot-calm_dassie" {
-		t.Errorf("slot = %q, want slot-calm_dassie", resp.Slot)
+	if resp.Slot != "calm_dassie" {
+		t.Errorf("slot = %q, want calm_dassie (bare, no slot- prefix)", resp.Slot)
 	}
-	if hub.lastUser != "slot-calm_dassie" {
-		t.Errorf("JH user = %q, want slot-calm_dassie", hub.lastUser)
+	if hub.lastUser != "calm_dassie" {
+		t.Errorf("JH user = %q, want calm_dassie — mint must target the bare name "+
+			"so the existing JH user (created by Caddy Remote-User) is found", hub.lastUser)
 	}
 	if resp.Token == "" || resp.HubURL != "https://workbench.test" {
 		t.Errorf("missing token/hub_url: %+v", resp)
