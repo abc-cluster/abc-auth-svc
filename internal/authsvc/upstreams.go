@@ -122,3 +122,6 @@ func (mockStore) CachedSlotState(context.Context, string) string          { retu
 func (mockStore) GetSlot(context.Context, string) (*Slot, error)          { return mockSlot(), nil }
 func (mockStore) PatchSlot(context.Context, string, map[string]any) error { return nil }
 func (mockStore) InvalidateSlotState(string)                              {}
+func (mockStore) ListSlots(context.Context, string, int) ([]Slot, error) {
+	return []Slot{*mockSlot()}, nil
+}

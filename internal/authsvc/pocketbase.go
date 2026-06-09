@@ -52,6 +52,9 @@ type SlotManager interface {
 	GetSlot(ctx context.Context, id string) (*Slot, error)
 	PatchSlot(ctx context.Context, id string, fields map[string]any) error
 	InvalidateSlotState(username string)
+	// ListSlots returns slot records; secrets are included and must be stripped
+	// by the caller before serving operator responses.
+	ListSlots(ctx context.Context, filter string, perPage int) ([]Slot, error)
 }
 
 // PBClient is the real SlotStore: an authenticated PocketBase REST client with a
@@ -167,6 +170,34 @@ func (c *PBClient) do(ctx context.Context, method, path string, body []byte, ret
 		return nil, fmt.Errorf("pocketbase %s %s: HTTP %d", method, path, resp.StatusCode)
 	}
 	return rb, nil
+}
+
+// ListSlots returns up to perPage slot records matching the optional filter
+// expression. Used by GET /manage/slots (operator-gated) which mirrors the
+// Python service's _manage_list_slots. Secret fields (claim_code,
+// nomad_token_secret, minio_secret_key) are deliberately included on the wire
+// here; the caller must strip them before serving operator responses — the
+// same convention the cred-source flip and rotate handlers follow.
+func (c *PBClient) ListSlots(ctx context.Context, filter string, perPage int) ([]Slot, error) {
+	if perPage <= 0 {
+		perPage = 500
+	}
+	q := fmt.Sprintf("perPage=%d&skipTotal=1", perPage)
+	if filter != "" {
+		q += "&filter=" + url.QueryEscape(filter)
+	}
+	path := "/api/collections/slots/records?" + q
+	rb, err := c.do(ctx, http.MethodGet, path, nil, true)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Items []Slot `json:"items"`
+	}
+	if err := json.Unmarshal(rb, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
 }
 
 // FindSlot returns the first slot matching a PocketBase filter expression.

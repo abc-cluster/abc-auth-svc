@@ -95,6 +95,10 @@ type Config struct {
 	CookieDomain      string
 	ShadowValidateURL string
 
+	// CLITokenTTL bounds the lifetime of one-time magic-link codes issued by
+	// POST /auth/cli-token (default 60s). Mirrors the Python CLI_TOKEN_TTL.
+	CLITokenTTL time.Duration
+
 	ReadTimeout   time.Duration
 	WriteTimeout  time.Duration
 	IdleTimeout   time.Duration
@@ -168,6 +172,12 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	if v := strings.TrimSpace(getenv("SESSION_TTL_SECONDS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.SessionTTL = time.Duration(n) * time.Second
+		}
+	}
+	cfg.CLITokenTTL = 60 * time.Second
+	if v := strings.TrimSpace(getenv("CLI_TOKEN_TTL")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.CLITokenTTL = time.Duration(n) * time.Second
 		}
 	}
 	cfg.CookieSecure = true

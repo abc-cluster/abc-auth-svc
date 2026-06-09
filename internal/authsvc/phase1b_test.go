@@ -107,6 +107,12 @@ func (f *fakeManager) PatchSlot(_ context.Context, _ string, fields map[string]a
 	return nil
 }
 func (f *fakeManager) InvalidateSlotState(u string) { f.invalidated = append(f.invalidated, u) }
+func (f *fakeManager) ListSlots(_ context.Context, _ string, _ int) ([]Slot, error) {
+	if f.slot == nil {
+		return nil, nil
+	}
+	return []Slot{*f.slot}, nil
+}
 
 func mgrServer(t *testing.T, store SlotStore, opToken string) (*Server, *bytes.Buffer) {
 	t.Helper()

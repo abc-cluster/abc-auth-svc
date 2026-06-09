@@ -16,6 +16,7 @@ type Server struct {
 	build        BuildInfo
 	up           Upstreams
 	session      sessionVerifier
+	codes        *magicCodeStore
 	shadowURL    string
 	shadowClient *http.Client
 	http         *http.Server
@@ -30,6 +31,7 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	s := &Server{
 		cfg: cfg, log: logger, build: build, up: up,
 		session:   sessionVerifier{secret: []byte(cfg.SessionSecret)},
+		codes:     newMagicCodeStore(),
 		shadowURL: cfg.ShadowValidateURL,
 		shadowClient: &http.Client{
 			Timeout: 3 * time.Second,
@@ -68,6 +70,26 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	mux.HandleFunc("POST /auth/manage/slots/{slot}/cred-source", s.handleCredSource)
 	mux.HandleFunc("GET /manage/slots/{slot}/diag", s.handleSlotDiag)
 	mux.HandleFunc("GET /auth/manage/slots/{slot}/diag", s.handleSlotDiag)
+	// Magic-link pair (`abc portal open *`).
+	mux.HandleFunc("POST /auth/cli-token", s.handleCLITokenPost)
+	mux.HandleFunc("POST /cli-token", s.handleCLITokenPost)
+	mux.HandleFunc("GET /auth/redeem", s.handleAuthRedeem)
+	mux.HandleFunc("GET /redeem", s.handleAuthRedeem)
+	// MinIO console SSO (used by `abc portal open minio`).
+	mux.HandleFunc("GET /auth/minio-login", s.handleAuthMinIOLogin)
+	mux.HandleFunc("GET /minio-login", s.handleAuthMinIOLogin)
+	// External-integrator Nomad token introspection.
+	mux.HandleFunc("GET /verify", s.handleVerifyNomad)
+	mux.HandleFunc("POST /verify", s.handleVerifyNomad)
+	mux.HandleFunc("GET /verify-namespace", s.handleVerifyNomad)
+	mux.HandleFunc("POST /verify-namespace", s.handleVerifyNomad)
+	// Operator list / single-slot GET.
+	mux.HandleFunc("GET /manage/slots", s.handleManageListSlots)
+	mux.HandleFunc("GET /auth/manage/slots", s.handleManageListSlots)
+	mux.HandleFunc("GET /manage/slots/{slot}", s.handleManageGetSlot)
+	mux.HandleFunc("GET /auth/manage/slots/{slot}", s.handleManageGetSlot)
+	// /healthz alias for Python compatibility.
+	mux.HandleFunc("GET /auth/health", s.handleHealthz)
 	mux.HandleFunc("/", s.handleNotFound)
 
 	handler := chain(mux,
