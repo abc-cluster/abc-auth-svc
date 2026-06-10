@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>seedling/v1 — abc-auth-svc API</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
+  <style>
+    body { margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .topbar {
+      background: #0b1d3a; color: #fff; padding: 0.6rem 1rem;
+      display: flex; align-items: center; gap: 1rem;
+      border-bottom: 1px solid #04122a;
+    }
+    .topbar h1 { font-size: 1rem; font-weight: 600; margin: 0; }
+    .topbar small { color: #8aa0c2; }
+    .topbar a { color: #9fd0ff; text-decoration: none; margin-left: auto; font-size: 0.85rem; }
+    .topbar a + a { margin-left: 1rem; }
+    redoc { display: block; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>seedling/v1 API</h1>
+    <small>ABC-cluster — auth & credential broker contract</small>
+    <a href="https://github.com/abc-cluster/abc-auth-svc">Source</a>
+    <a href="../api/seedling-v1.openapi.yaml">OpenAPI YAML</a>
+    <a href="../api/CONFORMANCE.md">Conformance</a>
+  </div>
+  <redoc spec-url="../api/seedling-v1.openapi.yaml" hide-loading expand-responses="200,302"></redoc>
+  <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+</body>
+</html>

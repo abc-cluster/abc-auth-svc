@@ -15,6 +15,14 @@ migration.
 
 📖 See [USAGE.md](USAGE.md) for running, flags, and the log format.
 
+🌐 **API contract:** `seedling/v1` — the wire contract this service exposes is the same
+contract **Khan** mirrors at the garden / abc-cloud tier. See:
+
+- [`api/seedling-v1.openapi.yaml`](api/seedling-v1.openapi.yaml) — OpenAPI 3.1 spec (source of truth).
+- [`api/CONFORMANCE.md`](api/CONFORMANCE.md) — Behavioural checklist + Schemathesis recipe a
+  mirror implementation must pass.
+- Rendered docs (Redoc) auto-published to GitHub Pages: <https://abc-cluster.github.io/abc-auth-svc/>.
+
 > **Status: Phases 0–3-core implemented; DEPLOYED on aither, shadow run live.**
 > Ported endpoints: `/healthz` `/readyz` `/version`; `/validate` `/validate-optional`
 > `/validate-shadow` (forward-auth + parity harness); `/auth/login` `/auth/logout`

@@ -1,0 +1,56 @@
+name: Publish API docs (Redoc) to GitHub Pages
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - api/seedling-v1.openapi.yaml
+      - api/CONFORMANCE.md
+      - docs/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate OpenAPI spec
+        run: |
+          pipx install openapi-spec-validator
+          openapi-spec-validator api/seedling-v1.openapi.yaml
+
+      - name: Assemble Pages payload
+        run: |
+          mkdir -p _site/api
+          cp docs/index.html _site/index.html
+          cp api/seedling-v1.openapi.yaml _site/api/seedling-v1.openapi.yaml
+          cp api/CONFORMANCE.md _site/api/CONFORMANCE.md
+          # Tiny landing redirect for the bare /api path → Redoc page
+          cat > _site/api/index.html <<'EOF'
+          <!doctype html><meta http-equiv="refresh" content="0; url=../index.html">
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

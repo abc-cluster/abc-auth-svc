@@ -1,0 +1,1298 @@
+openapi: 3.1.0
+info:
+  title: seedling/v1 — ABC-cluster auth & credential-broker API
+  summary: Forward-auth, session, credential exchange, and slot-management API exposed by abc-auth-svc; serves as the contract Khan must mirror.
+  description: |
+    `seedling/v1` is the wire contract exposed by **abc-auth-svc** — the Go forward-auth + credential-broker service that fronts the ABC-cluster
+    seedling-tier workbench. The same contract is intended to be implemented by **Khan** at the garden / abc-cloud tier so that clients
+    (`abc` CLI, BRIMS, external integrators, the workbench browser) speak one wire protocol regardless of which tier they connect to.
+
+    **Scope.** This document defines the request and response shapes, status codes, security schemes, headers, redirect semantics and error
+    envelopes for every public endpoint. Implementations (abc-auth-svc, Khan, future re-implementations) are conformant when they pass the
+    checks in `CONFORMANCE.md` against this specification.
+
+    **Source of truth.** The Go reference implementation in `abc-auth-svc` is authoritative for the v1 contract. When the implementation
+    and the spec disagree, the implementation is considered the bug and the spec is amended. Once v1 is locked (status: stable), wire-breaking
+    changes require a new major version (`seedling/v2`).
+
+    **Versioning policy.** The contract version is the `seedling/v1` major; every response carries `X-Abc-Auth-API-Version: v1`. Implementations
+    MAY add fields to JSON responses; clients MUST ignore unknown fields. Removing or repurposing a field, changing a status code, or changing a
+    redirect target is a breaking change.
+
+    **What this does not cover.** Build metadata (`/version` response fields), runtime configuration (`/manage/log-level` mutability), and
+    internal-only routes (`/validate-shadow`) are documented but expected to vary across implementations. The Caddy edge configuration that
+    fronts the service is out of scope.
+  version: 1.0.0-draft
+  contact:
+    name: ABC-cluster
+    url: https://github.com/abc-cluster/abc-auth-svc
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  x-contract-name: seedling/v1
+  x-implementations:
+    - name: abc-auth-svc
+      role: reference
+      url: https://github.com/abc-cluster/abc-auth-svc
+    - name: Khan
+      role: garden-tier mirror
+      url: https://github.com/abc-cluster/khan
+
+servers:
+  - url: http://127.0.0.1:4182
+    description: abc-auth-svc dev / shadow port (local listen)
+  - url: https://auth.seedling.abc-cluster.cloud
+    description: seedling production behind the Caddy edge
+  - url: https://khan.abc-cluster.cloud
+    description: Khan garden tier (placeholder)
+
+tags:
+  - name: health
+    description: Liveness / readiness / build metadata.
+  - name: forward-auth
+    description: Forward-auth gate endpoints consumed by the Caddy edge.
+  - name: auth
+    description: Browser-facing session lifecycle (login form, logout, identity introspection).
+  - name: workbench
+    description: JupyterHub user-token issuance for `abc workbench connect`.
+  - name: exchange
+    description: Opaque-token → real-creds exchange (`cred_source = seedling/v1`).
+  - name: slots-user
+    description: Slot self-service — claim and config retrieval.
+  - name: slots-operator
+    description: Operator slot management (suspend / reactivate / rotate / cred-source / list / get / diag). Requires the operator token.
+  - name: cli-tokens
+    description: Magic-link issuance and redemption used by `abc portal open`.
+  - name: minio-sso
+    description: MinIO console SSO landing.
+  - name: verify
+    description: External-integrator forward-auth used by Traefik / observability sidecars.
+  - name: secrets
+    description: Per-slot opaque secret broker on top of Nomad Variables.
+  - name: log-level
+    description: Runtime log-level introspection and mutation.
+
+security:
+  # No default — each operation declares its required scheme(s) explicitly.
+  []
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness
+      operationId: getHealthz
+      security: []
+      x-aliases: ["/auth/health"]
+      responses:
+        "200":
+          description: Process is up.
+          content:
+            text/plain:
+              schema: { type: string, const: "ok\n" }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness
+      operationId: getReadyz
+      security: []
+      responses:
+        "200":
+          description: Service is ready (or running in mock mode).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ready" }
+
+  /version:
+    get:
+      tags: [health]
+      summary: Build identity
+      operationId: getVersion
+      security: []
+      responses:
+        "200":
+          description: Build metadata stamped by ldflags. Fields MAY be empty in dev builds.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionInfo" }
+
+  /validate:
+    get:
+      tags: [forward-auth]
+      summary: Forward-auth gate (mandatory)
+      operationId: forwardAuth
+      description: |
+        The Caddy edge sends each upstream request here. On success the response is 200 with identity headers; on failure it is a 302 to
+        the login form (Caddy interprets this as deny). The body is always empty.
+      security: [{ abcSession: [] }]
+      parameters:
+        - in: header
+          name: X-Forwarded-Uri
+          schema: { type: string }
+          required: false
+          description: Original request path; URL-encoded into the login `next` parameter on deny.
+      responses:
+        "200":
+          description: Authenticated. Identity headers set.
+          headers:
+            X-Auth-User:        { $ref: "#/components/headers/XAuthUser" }
+            Remote-User:        { $ref: "#/components/headers/RemoteUser" }
+            X-WEBAUTH-USER:     { $ref: "#/components/headers/XWebauthUser" }
+        "302":
+          description: |
+            Not authenticated, suspended, or expired. `Location` is `/auth/login?next=<uri>`. When the cookie was valid but the slot is
+            suspended/expired the response also clears the `abc_session` cookie.
+          headers:
+            Location:    { schema: { type: string }, required: true }
+            Set-Cookie:
+              schema: { type: string }
+              description: Present only when clearing `abc_session` (suspended/expired branch).
+
+  /validate-optional:
+    get:
+      tags: [forward-auth]
+      summary: Forward-auth gate (anonymous-tolerant)
+      description: Always returns 200; identity headers are present only when the caller carries a valid non-blocked `abc_session` cookie. Use for upstreams that allow anonymous viewers (e.g. Grafana public dashboards).
+      operationId: forwardAuthOptional
+      security:
+        - {}
+        - { abcSession: [] }
+      responses:
+        "200":
+          description: Always 200. Identity headers absent when caller is anonymous.
+          headers:
+            X-Auth-User:    { $ref: "#/components/headers/XAuthUser" }
+            Remote-User:    { $ref: "#/components/headers/RemoteUser" }
+            X-WEBAUTH-USER: { $ref: "#/components/headers/XWebauthUser" }
+
+  /validate-shadow:
+    get:
+      tags: [forward-auth]
+      summary: Parity harness (internal-only)
+      operationId: forwardAuthShadow
+      x-internal: true
+      description: |
+        Phase-2 strangler harness used to compare the Go and legacy Python verdicts. Implementations other than the reference MAY omit this
+        endpoint; Khan does not need to implement it.
+      security: [{ abcSession: [] }]
+      responses:
+        "200":
+          description: Allow (same identity headers as /validate).
+        "302":
+          description: Deny. No Location is set.
+
+  /auth/login:
+    get:
+      tags: [auth]
+      summary: Render HTML login form
+      operationId: getLoginForm
+      security: []
+      parameters:
+        - in: query
+          name: next
+          schema: { type: string }
+          required: false
+          description: Post-login redirect target. Only same-origin absolute paths survive sanitisation.
+      responses:
+        "200":
+          description: HTML form posting back to `POST /auth/login`.
+          content:
+            text/html:
+              schema: { type: string }
+    post:
+      tags: [auth]
+      summary: Validate credentials and set session cookie
+      operationId: submitLogin
+      security: []
+      description: |
+        On success: 302 + `Set-Cookie: abc_session=…`. On failure: the same form is **re-rendered with 200** and an inline error string —
+        there is intentionally **no JSON 401** response on this endpoint. Browsers are the only intended caller.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: "#/components/schemas/LoginForm" }
+      responses:
+        "200":
+          description: |
+            Failure. HTML form re-rendered with one of the inline error strings:
+              - "Username and password are required."
+              - "Invalid username or password."
+              - "Account suspended. Contact your administrator."
+              - "Account is no longer active."
+          content:
+            text/html: { schema: { type: string } }
+        "302":
+          description: Success. `Location` is the sanitised `next`. The cookie attributes are described in `securitySchemes.abcSession`.
+          headers:
+            Location:   { schema: { type: string }, required: true }
+            Set-Cookie:
+              required: true
+              schema: { type: string, examples: ["abc_session=<value>; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=604800"] }
+
+  /auth/logout:
+    get:
+      tags: [auth]
+      summary: Clear the session cookie
+      operationId: logout
+      security: []
+      responses:
+        "302":
+          description: "Cookie cleared (MaxAge=-1); `Location: /auth/login`."
+          headers:
+            Location:   { schema: { type: string }, required: true }
+            Set-Cookie: { schema: { type: string }, required: true }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Caller identity and groups (Nomad-token-driven)
+      operationId: getMe
+      security: [{ nomadBearer: [] }, { nomadHeaderToken: [] }]
+      responses:
+        "200":
+          description: Identity bundle.
+          headers:
+            Access-Control-Allow-Origin: { schema: { type: string, const: "*" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401":
+          description: Missing or invalid Nomad token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                missing: { value: { error: "missing token" } }
+                invalid: { value: { error: "invalid token" } }
+
+  /workbench/token:
+    post:
+      tags: [workbench]
+      summary: Mint a JupyterHub user token
+      operationId: mintWorkbenchToken
+      x-aliases: ["/auth/workbench/token"]
+      security: [{ nomadBearer: [] }, { nomadHeaderToken: [] }]
+      description: |
+        Used by `abc workbench connect`. Pool-token convention: a Nomad token whose `Name` is `pool-<bare>` mints against the JupyterHub user
+        `<bare>` (matches the Caddy `Remote-User` of the workbench).
+      requestBody:
+        required: false
+        description: Optional. Body limit 64 KiB.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WorkbenchTokenRequest" }
+      responses:
+        "200":
+          description: Token bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkbenchTokenResponse" }
+        "400":
+          description: Malformed body or out-of-range `expires_in`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                badJson:      { value: { error: "invalid JSON body" } }
+                notInt:       { value: { error: "expires_in must be an integer (seconds)" } }
+                nonPositive:  { value: { error: "expires_in must be positive" } }
+                tooLarge:     { value: { error: "expires_in cannot exceed 30 days (2592000 seconds)" } }
+        "401":
+          description: Missing or invalid Nomad token; username could not be derived from token Name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "403":
+          description: Slot is suspended or expired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                suspended: { value: { error: "slot is suspended" } }
+                expired:   { value: { error: "slot is expired" } }
+        "502":
+          description: |
+            JupyterHub returned 403/404 or another HTTP error. `diag` is set when the probe ran.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkbenchTokenBadGateway" }
+        "503":
+          description: Transport-level error talking to JupyterHub.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                unreachable: { value: { error: "hub unreachable" } }
+
+  /exchange:
+    post:
+      tags: [exchange]
+      summary: Opaque-token → real-credentials bundle
+      operationId: exchangeOpaque
+      x-aliases: ["/auth/exchange"]
+      security: [{ opaqueBearer: [] }]
+      description: |
+        Returns the full credentials bundle (Nomad ACL token + secret + namespace/datacenter/pools, MinIO endpoint + access/secret keys) for
+        a slot whose `cred_source` is `seedling/v1`. Wire field names are locked against `abc-cluster-cli`'s `SeedlingV1CredSource` struct.
+      responses:
+        "200":
+          description: Credentials bundle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExchangeBundle" }
+        "401":
+          description: Bearer missing, empty or unknown / not in active state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                missing:  { value: { error: "missing_bearer_token" } }
+                empty:    { value: { error: "empty_bearer_token" } }
+                invalid:  { value: { error: "invalid_or_inactive_token" } }
+        "409":
+          description: Opaque resolves but slot's cred_source is not seedling/v1.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                wrongSource: { value: { error: "slot_not_on_seedling_v1" } }
+        "500":
+          description: Store not configured or backend error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /slots/me/config:
+    get:
+      tags: [slots-user]
+      summary: Retrieve current slot's rendered config.yaml
+      operationId: getSlotsMeConfig
+      x-aliases: ["/auth/slots/me/config"]
+      security: [{ nomadBearer: [] }, { nomadHeaderToken: [] }]
+      description: |
+        Returns the slot's `config.yaml` as a YAML attachment. The renderer persists `config_yaml`, `config_yaml_at`, `config_yaml_renderer`
+        back to the store on first read.
+      responses:
+        "200":
+          description: Rendered config.yaml.
+          headers:
+            Content-Disposition: { schema: { type: string, examples: ["attachment; filename=\"abc-config-solar_civet.yaml\""] }, required: true }
+            Cache-Control:       { schema: { type: string, const: "no-store" }, required: true }
+          content:
+            text/yaml:
+              schema: { type: string }
+        "401":
+          description: Missing or invalid Nomad token, or username could not be derived.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Slot is in a non-active state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                unclaimed: { value: { error: "slot_unclaimed" } }
+                suspended: { value: { error: "slot_suspended" } }
+                unknown:   { value: { error: "slot_unknown" } }
+        "404":
+          description: Slot not found.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "500":
+          description: Store missing, lookup failed, or renderer failed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /slots/claim:
+    post:
+      tags: [slots-user]
+      summary: Claim an unclaimed slot
+      operationId: claimSlot
+      x-aliases: ["/auth/slots/claim"]
+      security: []
+      description: |
+        Anonymous endpoint — the `claim_code` is the proof of possession. Returns the rendered config.yaml as an attachment; the bare opaque
+        token (when `cred_source = seedling/v1`) lives inside the YAML and is never returned elsewhere. Body limit 64 KiB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SlotClaimRequest" }
+      responses:
+        "200":
+          description: Slot claimed and config.yaml emitted.
+          headers:
+            Content-Disposition: { schema: { type: string, examples: ["attachment; filename=\"abc-config-solar_civet.yaml\""] }, required: true }
+            Content-Length:      { schema: { type: integer }, required: true }
+            Cache-Control:       { schema: { type: string, const: "no-store" }, required: true }
+          content:
+            application/yaml:
+              schema: { type: string }
+        "400":
+          description: Malformed body, missing fields, or invalid `cred_source`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/InvalidCredSourceError"
+              examples:
+                badJson:       { value: { error: "invalid_json" } }
+                missingCode:   { value: { error: "claim_code_required" } }
+                badCredSource: { value: { error: "invalid_cred_source", requested: "remote", allowed: ["local","seedling/v1"] } }
+        "404":
+          description: Code unknown or already-claimed (no enumeration distinguishing the two cases).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                bad: { value: { error: "code_invalid_or_used" } }
+        "500":
+          description: Store not writable or backend error.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /manage/slots:
+    get:
+      tags: [slots-operator]
+      summary: List slot records (secret-stripped projection)
+      operationId: listManagedSlots
+      x-aliases: ["/auth/manage/slots"]
+      security: [{ operatorToken: [] }]
+      responses:
+        "200":
+          description: |
+            Array of slot projections (no MinIO secret, no Nomad token secret). Capped at 500 records server-side; paging is not exposed.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/PublicSlot" }
+        "401":
+          description: Missing or invalid operator token.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "500":
+          description: Store not writable / backend error.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /manage/slots/{slot}:
+    parameters:
+      - $ref: "#/components/parameters/Slot"
+    get:
+      tags: [slots-operator]
+      summary: Single slot lookup
+      operationId: getManagedSlot
+      x-aliases: ["/auth/manage/slots/{slot}"]
+      security: [{ operatorToken: [] }]
+      responses:
+        "200":
+          description: Slot projection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSlot" }
+        "400":
+          description: Missing slot path parameter.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /manage/slots/{slot}/cred-source:
+    parameters:
+      - $ref: "#/components/parameters/Slot"
+    post:
+      tags: [slots-operator]
+      summary: Flip slot cred_source between local and seedling/v1
+      operationId: setCredSource
+      x-aliases: ["/auth/manage/slots/{slot}/cred-source"]
+      security: [{ operatorToken: [] }]
+      description: |
+        On `local → seedling/v1` transition a fresh opaque token is minted and returned exactly once in the response body. On any other
+        transition or no-op the `opaque_token` field is absent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CredSourceRequest" }
+      responses:
+        "200":
+          description: Transition applied (or no-op acknowledged).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CredSourceResponse" }
+        "400":
+          description: Invalid body, invalid value, slot not claimed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /manage/slots/{slot}/diag:
+    parameters:
+      - $ref: "#/components/parameters/Slot"
+    get:
+      tags: [slots-operator]
+      summary: End-to-end readiness diagnostic
+      operationId: diagnoseSlot
+      x-aliases: ["/auth/manage/slots/{slot}/diag"]
+      security: [{ operatorToken: [] }]
+      description: |
+        Read-only report — PB row presence, JH user existence, host probes (unix user, workbench home, host creds file, abc-config file),
+        a verdict (`ready` or `blocked_at: …`), and a list of remediation hints. Returns 200 even when the verdict is failure, so a client
+        always gets the structured detail. Body is pretty-printed JSON (2-space indent).
+      responses:
+        "200":
+          description: Diagnostic report (verdict embedded).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SlotDiag" }
+        "400":
+          description: Missing slot path parameter.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /manage/slots/{slot}/suspend:
+    parameters:
+      - $ref: "#/components/parameters/Slot"
+    post:
+      tags: [slots-operator]
+      summary: Suspend a claimed slot
+      operationId: suspendSlot
+      x-aliases: ["/auth/manage/slots/{slot}/suspend"]
+      security: [{ operatorToken: [] }]
+      description: |
+        Best-effort across MinIO disable, Nomad ACL token delete, host creds file removal, JH server stop; only the PocketBase patch
+        (`state=suspended`) failure aborts. Returns 200 once PB transitions.
+      responses:
+        "200":
+          description: Slot suspended.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "400":
+          description: Missing slot or slot not in claimed state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                missingSlot: { value: { error: "missing_slot" } }
+                notClaimed:  { value: { error: "slot_not_claimed" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /manage/slots/{slot}/reactivate:
+    parameters:
+      - $ref: "#/components/parameters/Slot"
+    post:
+      tags: [slots-operator]
+      summary: Reactivate suspended slot, rotating credentials
+      operationId: reactivateSlot
+      x-aliases: ["/auth/manage/slots/{slot}/reactivate"]
+      security: [{ operatorToken: [] }]
+      responses:
+        "200":
+          description: Slot reactivated. New MinIO secret + Nomad token are persisted to PB; not returned in the body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "400":
+          description: Missing slot or slot not in suspended state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                missingSlot:  { value: { error: "missing_slot" } }
+                notSuspended: { value: { error: "slot_not_suspended" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500":
+          description: Admin clients unconfigured, MinIO rotate failed, Nomad token mint failed, or backend error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                noAdmin:        { value: { error: "admin_clients_not_configured" } }
+                rotateFailed:   { value: { error: "minio_rotate_failed" } }
+                nomadFailed:    { value: { error: "nomad_token_create_failed" } }
+
+  /manage/slots/{slot}/rotate:
+    parameters:
+      - $ref: "#/components/parameters/Slot"
+    post:
+      tags: [slots-operator]
+      summary: Rotate slot credentials in place
+      operationId: rotateSlot
+      x-aliases: ["/auth/manage/slots/{slot}/rotate"]
+      security: [{ operatorToken: [] }]
+      description: |
+        The slot's state is unchanged (claimed stays claimed, suspended stays suspended). New MinIO secret + new Nomad token; old Nomad
+        token's accessor is deleted best-effort. JupyterHub server is stopped to force re-pickup.
+      responses:
+        "200":
+          description: Credentials rotated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "400":
+          description: Missing slot or slot not in claimed/suspended state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                missingSlot: { value: { error: "missing_slot" } }
+                notActive:   { value: { error: "slot_not_active" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /cli-token:
+    post:
+      tags: [cli-tokens]
+      summary: Mint a single-use magic-link code
+      operationId: mintCLIToken
+      x-aliases: ["/auth/cli-token"]
+      security: []
+      description: |
+        Called by `abc portal open <portal>`. The Nomad bearer is passed in the JSON body (not as a header) because the resulting code is
+        what the user copies; the wire path for the original Nomad token never crosses the redirect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CLITokenRequest" }
+      responses:
+        "200":
+          description: Magic-link code (64 hex chars) and its TTL.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CLITokenResponse" }
+        "400":
+          description: Missing body, malformed JSON, or `nomad_token` missing.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "401":
+          description: Nomad token invalid/expired or username not derivable.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Slot is suspended or expired.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "500":
+          description: Code mint failed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /redeem:
+    get:
+      tags: [cli-tokens]
+      summary: Consume a magic-link code, set session cookie, redirect to portal
+      operationId: redeemCLIToken
+      x-aliases: ["/auth/redeem"]
+      security: []
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema: { type: string, minLength: 64, maxLength: 64 }
+      responses:
+        "302":
+          description: |
+            On success: `abc_session` cookie set, `Location` is the per-portal destination (`/login` for Grafana, the entry's `next_url`
+            when trusted under `*.abc-cluster.cloud`, else the sanitised path). On failure: `Location: /auth/login?error=missing_code` or
+            `…?error=link_expired`. There is intentionally no JSON 4xx — invalid codes redirect to the login form.
+          headers:
+            Location:   { schema: { type: string }, required: true }
+            Set-Cookie:
+              required: false
+              schema: { type: string }
+              description: Present only on success.
+
+  /minio-login:
+    get:
+      tags: [minio-sso]
+      summary: Set MinIO console cookie and bounce to MinIO root
+      operationId: minioSSOLand
+      x-aliases: ["/auth/minio-login"]
+      security: []
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema: { type: string, minLength: 64, maxLength: 64 }
+      responses:
+        "302":
+          description: |
+            On success: `Set-Cookie: token=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`; `Location: /`. On failure:
+            `Location: /?error=missing_code | link_expired` or a plain `Location: /` (no JWT available, MinIO will show its login form).
+            **Cookie name is `token` (not `abc_session`)** because it scopes to the MinIO console origin.
+          headers:
+            Location:   { schema: { type: string }, required: true }
+            Set-Cookie:
+              required: false
+              schema: { type: string }
+
+  /verify:
+    parameters:
+      - in: query
+        name: x
+        schema: { type: string }
+        required: false
+        description: Reserved — implementations MUST ignore unknown query parameters.
+    get:
+      tags: [verify]
+      summary: External-integrator forward-auth (Nomad-token-driven)
+      operationId: verifyGet
+      x-aliases: ["/verify-namespace"]
+      security: [{ nomadBearer: [] }, { nomadHeaderToken: [] }]
+      responses:
+        "200":
+          description: Authorised. Identity headers set; body is `"ok\n"`.
+          headers:
+            X-Auth-User:      { schema: { type: string }, required: true }
+            X-Auth-Group:     { schema: { type: string }, required: true }
+            X-Auth-Namespace: { schema: { type: string }, required: true }
+            X-Auth-Policies:  { schema: { type: string }, required: true, description: "Comma-separated policy names. `management` for management tokens." }
+            X-Auth-Type:      { schema: { type: string, enum: ["client","management"] }, required: true }
+          content:
+            text/plain:
+              schema: { type: string, const: "ok\n" }
+        "401":
+          description: Missing or invalid Nomad token. Body is plain text.
+          content:
+            text/plain:
+              schema: { type: string, const: "unauthorized: missing or invalid token\n" }
+    post:
+      tags: [verify]
+      summary: External-integrator forward-auth (Nomad-token-driven)
+      operationId: verifyPost
+      description: Identical to GET. Body, if any, is ignored.
+      security: [{ nomadBearer: [] }, { nomadHeaderToken: [] }]
+      responses:
+        "200":
+          description: Authorised.
+          content: { text/plain: { schema: { type: string, const: "ok\n" } } }
+        "401":
+          description: Unauthorised.
+          content: { text/plain: { schema: { type: string, const: "unauthorized: missing or invalid token\n" } } }
+
+  /secrets/put:
+    post:
+      tags: [secrets]
+      summary: Store a per-slot secret in Nomad Variables
+      operationId: secretsPut
+      x-aliases: ["/auth/secrets/put"]
+      security: [{ opaqueBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretPutRequest" }
+      responses:
+        "200":
+          description: Written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "400":
+          description: Malformed body or required fields missing.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "401":
+          description: Opaque token missing, empty or unknown / not active.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "500":
+          description: Store unconfigured or Nomad write failed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /secrets/get:
+    post:
+      tags: [secrets]
+      summary: Read a previously-stored per-slot secret
+      operationId: secretsGet
+      x-aliases: ["/auth/secrets/get"]
+      security: [{ opaqueBearer: [] }]
+      description: |
+        Uses POST (not GET) because the JSON body carries the key; the bearer + key combination is treated as sensitive and is never on the
+        URL. Returned `value` is always a string — original type information is lost; callers MUST decode if they expect non-string data.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretGetRequest" }
+      responses:
+        "200":
+          description: Stored value (always a string).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecretGetResponse" }
+        "400":
+          description: Malformed body or missing `key`.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "401":
+          description: Bearer missing, empty or invalid.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "404":
+          description: No variable at the resolved path.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "500":
+          description: Store unconfigured or Nomad read failed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /manage/log-level:
+    get:
+      tags: [log-level]
+      summary: Read current runtime log level
+      operationId: getLogLevel
+      x-aliases: ["/auth/manage/log-level"]
+      security: [{ operatorToken: [] }]
+      responses:
+        "200":
+          description: Current level.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogLevelInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [log-level]
+      summary: Change runtime log level (no restart)
+      operationId: setLogLevel
+      x-aliases: ["/auth/manage/log-level"]
+      security: [{ operatorToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LogLevelSet" }
+      responses:
+        "200":
+          description: Level changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogLevelSetResponse" }
+        "400":
+          description: Invalid body or invalid value.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorEnvelope"
+                  - $ref: "#/components/schemas/InvalidLevelError"
+              examples:
+                invalidJson:   { value: { error: "invalid_json" } }
+                levelRequired: { value: { error: "level_required" } }
+                badLevel:      { value: { error: "invalid_level", allowed: ["info","debug","trace"] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Server has no mutable level var (test mode).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+components:
+  parameters:
+    Slot:
+      in: path
+      name: slot
+      required: true
+      schema: { type: string, pattern: "^[a-z0-9][a-z0-9_]{1,63}$" }
+      description: Slot identifier (e.g. `solar_civet`). Lowercase letters, digits and underscores.
+
+  headers:
+    XAuthUser:
+      description: Authenticated slot identifier — set on /validate, /validate-optional success.
+      schema: { type: string }
+    RemoteUser:
+      description: Same value as X-Auth-User; provided for upstream compatibility (JupyterHub).
+      schema: { type: string }
+    XWebauthUser:
+      description: Same value as X-Auth-User; provided for upstream compatibility (Grafana auth.proxy).
+      schema: { type: string }
+
+  securitySchemes:
+    abcSession:
+      type: apiKey
+      in: cookie
+      name: abc_session
+      description: |
+        HMAC-SHA-256 signed session cookie. Value `base64url(<username>:<expiry-unix>:<hex-hmac>)` (URL-safe base64, padded or unpadded
+        both accepted). Signed with the server's `SESSION_SECRET`. Issued by `POST /auth/login` and `GET /redeem`. Cookie attributes:
+        `Path=/`, `HttpOnly`, `SameSite=Lax`, `Secure` (gated by config, default true), `Domain` (set when configured), `MaxAge =
+        SESSION_TTL_SECONDS` (default 604800).
+    nomadBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: NomadACLToken
+      description: |
+        Nomad ACL token via `Authorization: Bearer <token>`. The server introspects via `GET /v1/acl/token/self` on the configured Nomad
+        cluster. The token's `Name` field is interpreted as the slot identity (`pool-<x>` → `<x>`; bare `<x>` → `<x>`).
+    nomadHeaderToken:
+      type: apiKey
+      in: header
+      name: X-Nomad-Token
+      description: |
+        Same Nomad ACL token, supplied as the Nomad-native header. The two schemes are equivalent and interchangeable across endpoints
+        that accept Nomad-bearer auth.
+    opaqueBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: AbcOpaque
+      description: |
+        Opaque single-use slot token in `Authorization: Bearer abco_<…>`. Issued exactly once by `POST /slots/claim` (when claim resolves
+        to `cred_source = seedling/v1`) or by `POST /manage/slots/{slot}/cred-source` (on `local → seedling/v1` transition). The server
+        stores only `sha256Hex(opaque)`; the bare token never leaves the host except as a one-shot response body.
+    operatorToken:
+      type: apiKey
+      in: header
+      name: X-Operator-Token
+      description: |
+        Static operator token, compared in constant time against `OPERATOR_TOKEN` server config. Required for every `/manage/*`
+        endpoint. When the server has no configured operator token every `/manage/*` request is rejected with 401.
+
+  responses:
+    Unauthorized:
+      description: Missing, malformed, or rejected auth credential.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            generic: { value: { error: "unauthorized" } }
+    NotFound:
+      description: Resource (slot, etc.) does not exist.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            generic: { value: { error: "not_found" } }
+    InternalError:
+      description: Backend error.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+          examples:
+            generic: { value: { error: "internal_error" } }
+
+  schemas:
+    Ok:
+      type: object
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+
+    ErrorEnvelope:
+      type: object
+      description: |
+        Canonical 4xx/5xx body shape. `error` is a stable machine-readable snake_case tag; clients SHOULD switch on it. Specific endpoints
+        MAY add extra fields alongside `error` — those are documented per-response.
+      additionalProperties: true
+      required: [error]
+      properties:
+        error: { type: string, minLength: 1 }
+
+    InvalidCredSourceError:
+      type: object
+      additionalProperties: false
+      required: [error, requested, allowed]
+      properties:
+        error:     { type: string, const: invalid_cred_source }
+        requested: { type: string }
+        allowed:
+          type: array
+          items: { type: string, enum: [local, seedling/v1] }
+
+    InvalidLevelError:
+      type: object
+      additionalProperties: false
+      required: [error, allowed]
+      properties:
+        error:   { type: string, const: invalid_level }
+        allowed:
+          type: array
+          items: { type: string, enum: [info, debug, trace] }
+
+    Ready:
+      type: object
+      additionalProperties: false
+      required: [status, version]
+      properties:
+        status:  { type: string, const: ready }
+        version: { type: string }
+        checks:
+          type: object
+          additionalProperties: true
+          properties:
+            mode:
+              type: string
+              description: Set to `mock-upstreams` when the server is running with mocked PB/JH/MinIO/Nomad upstreams.
+
+    VersionInfo:
+      type: object
+      additionalProperties: false
+      properties:
+        version:    { type: string }
+        build_time: { type: string }
+        git_commit: { type: string }
+
+    LoginForm:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 1 }
+        password: { type: string, format: password, minLength: 1 }
+        next:     { type: string, description: "Same-origin absolute path only; double-slash and scheme-relative URIs are rejected." }
+
+    Me:
+      type: object
+      additionalProperties: false
+      required: [user, groups, primary_group, namespace, role_based]
+      properties:
+        user:          { type: string }
+        groups:        { type: array, items: { type: string } }
+        primary_group: { type: string }
+        namespace:     { type: string, description: "Equals `primary_group` in the seedling tier." }
+        role_based:    { type: boolean, description: "True when token policies begin with `role:`." }
+
+    WorkbenchTokenRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        note:       { type: string, default: "abc-cli-<user>" }
+        expires_in:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 2592000
+          default: 604800
+          description: TTL in seconds. Default 7 days; maximum 30 days.
+
+    WorkbenchTokenResponse:
+      type: object
+      required: [token, id, expires_at, scopes, note, slot, hub_url]
+      properties:
+        token:      { type: string }
+        id:         { type: string }
+        expires_at: { type: string, format: date-time }
+        scopes:     { type: array, items: { type: string } }
+        note:       { type: string }
+        slot:       { type: string }
+        hub_url:    { type: string, format: uri }
+
+    WorkbenchTokenBadGateway:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        hint:  { type: string, description: "Operator-facing GET /manage/slots/{slot}/diag URL." }
+        diag:
+          type: string
+          enum: [jh-user-not-found, jh-scope-or-token-issue, jh-user-probe-failed]
+          description: Set only when the JupyterHub probe ran.
+
+    ExchangeBundle:
+      type: object
+      additionalProperties: false
+      required: [whoami, source, nomad, minio]
+      properties:
+        whoami: { type: string }
+        source: { type: string, const: seedling/v1 }
+        nomad:
+          type: object
+          additionalProperties: false
+          required: [addr, token, namespace, datacenters, head_pool, worker_pool]
+          properties:
+            addr:        { type: string, format: uri }
+            token:       { type: string, description: "Nomad ACL token secret. Treat as a credential." }
+            namespace:   { type: string }
+            datacenters: { type: array, items: { type: string } }
+            head_pool:   { type: string }
+            worker_pool: { type: string }
+        minio:
+          type: object
+          additionalProperties: false
+          required: [endpoint, access_key, secret_key]
+          properties:
+            endpoint:   { type: string, format: uri }
+            access_key: { type: string }
+            secret_key: { type: string }
+
+    SlotClaimRequest:
+      type: object
+      required: [claim_code]
+      properties:
+        claim_code:  { type: string, minLength: 1 }
+        name:        { type: string }
+        email:       { type: string, format: email }
+        cred_source: { type: string, enum: ["", local, seedling/v1] }
+
+    PublicSlot:
+      type: object
+      description: |
+        Operator-visible projection of the PocketBase slot record with all secrets stripped (no `minio_secret_key`, no `nomad_token_secret`).
+        Fields beyond these MAY appear in concrete implementations; clients MUST tolerate extras.
+      additionalProperties: true
+      required: [id, slot_name, group, state, cred_source]
+      properties:
+        id:                { type: string }
+        slot_name:         { type: string }
+        group:             { type: string }
+        group_name:        { type: string }
+        state:             { type: string, enum: [unclaimed, claimed, suspended, expired] }
+        cred_source:       { type: string, enum: ["", local, seedling/v1] }
+        minio_access_key:  { type: string }
+        config_yaml_at:    { type: string, format: date-time }
+        opaque_token_hash: { type: string, description: "Hex sha256 of the bare opaque token; presence implies a valid opaque was issued." }
+
+    CredSourceRequest:
+      type: object
+      required: [cred_source]
+      additionalProperties: false
+      properties:
+        cred_source: { type: string, enum: [local, seedling/v1] }
+
+    CredSourceResponse:
+      type: object
+      required: [ok, cred_source, changed]
+      properties:
+        ok:                   { type: boolean, const: true }
+        cred_source:          { type: string, enum: [local, seedling/v1] }
+        changed:              { type: boolean }
+        previous_cred_source: { type: string, enum: [local, seedling/v1], description: "Present only when `changed=true`." }
+        opaque_token:         { type: string, description: "Bare opaque, returned exactly once on `local → seedling/v1`." }
+        note:                 { type: string, description: "Advisory only; present when opaque is returned." }
+
+    SlotDiag:
+      type: object
+      additionalProperties: true
+      required: [slot, pb, jh, host, checks, verdict, remediation_hints]
+      properties:
+        slot: { type: string }
+        pb:
+          type: object
+          additionalProperties: true
+          properties:
+            state:            { type: string }
+            minio_access_key: { type: string }
+            group:            { type: string }
+            cred_source:      { type: string }
+        jh:
+          type: object
+          additionalProperties: true
+          properties:
+            api_url:            { type: string, format: uri }
+            admin_token_len:    { type: integer }
+            admin_token_prefix: { type: string }
+            user_name_checked:  { type: string }
+            user_exists:        { type: [boolean, "null"] }
+        host:
+          type: object
+          additionalProperties: true
+          required: [unix_user, workbench_home, minio_creds_file, abc_config_file]
+          properties:
+            unix_user:
+              type: object
+              required: [name, exists]
+              properties:
+                name:   { type: string }
+                exists: { type: boolean }
+                uid:    { type: integer }
+                error:  { type: string }
+            workbench_home:
+              type: object
+              required: [path, exists]
+              properties:
+                path:          { type: string }
+                exists:        { type: boolean }
+                owner_uid:     { type: integer }
+                owner_matches: { type: boolean }
+            minio_creds_file:
+              type: object
+              required: [path, exists]
+              properties:
+                path:   { type: string }
+                exists: { type: boolean }
+            abc_config_file:
+              type: object
+              required: [path, exists]
+              properties:
+                path:   { type: string }
+                exists: { type: boolean }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [check, ok]
+            properties:
+              check:  { type: string }
+              ok:     { type: boolean }
+              detail: { type: string }
+        verdict:
+          type: string
+          description: "`ready` when everything passes; otherwise `blocked_at: <comma-sep check names>`."
+        remediation_hints:
+          type: array
+          items: { type: string }
+
+    CLITokenRequest:
+      type: object
+      required: [nomad_token]
+      additionalProperties: false
+      properties:
+        nomad_token:    { type: string, minLength: 1 }
+        next:           { type: string, default: "/" }
+        portal:         { type: string, enum: [workbench, grafana, minio], description: "Optional; controls the post-redeem destination." }
+        minio_password: { type: string, description: "Consulted only when `portal=minio`. Defaults to `nomad_token`." }
+
+    CLITokenResponse:
+      type: object
+      required: [code, ttl]
+      additionalProperties: false
+      properties:
+        code: { type: string, minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" }
+        ttl:  { type: integer, format: int64, minimum: 1 }
+
+    SecretPutRequest:
+      type: object
+      required: [key, value]
+      additionalProperties: false
+      properties:
+        key:   { type: string, minLength: 1 }
+        value:
+          description: |
+            Any JSON value. Strings pass through verbatim; null becomes empty string; everything else is JSON-encoded into a string. The
+            original type is not recoverable on read.
+        group: { type: string, description: "Optional namespace override (`su-<group>`); defaults to the slot's primary group." }
+
+    SecretGetRequest:
+      type: object
+      required: [key]
+      additionalProperties: false
+      properties:
+        key: { type: string, minLength: 1 }
+
+    SecretGetResponse:
+      type: object
+      required: [value]
+      additionalProperties: false
+      properties:
+        value: { type: string }
+
+    LogLevelInfo:
+      type: object
+      required: [level, mutable]
+      additionalProperties: false
+      properties:
+        level:   { type: string, enum: [info, debug, trace] }
+        mutable: { type: boolean }
+
+    LogLevelSet:
+      type: object
+      required: [level]
+      additionalProperties: false
+      properties:
+        level:
+          type: string
+          description: |
+            Canonical values are `info`, `debug`, `trace`. Numeric aliases (`1`/`l1`/`info`, `2`/`l2`/`debug`, `3`/`l3`/`trace`) are
+            accepted on the wire by the reference implementation; Khan MAY accept them but is not required to.
+
+    LogLevelSetResponse:
+      type: object
+      required: [ok, level, previous]
+      additionalProperties: false
+      properties:
+        ok:       { type: boolean, const: true }
+        level:    { type: string, enum: [info, debug, trace] }
+        previous: { type: string, enum: [info, debug, trace] }
