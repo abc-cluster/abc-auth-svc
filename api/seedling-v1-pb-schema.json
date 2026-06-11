@@ -1,0 +1,60 @@
+[
+  {
+    "name": "groups",
+    "type": "base",
+    "listRule": "",
+    "viewRule": "",
+    "createRule": "@request.auth.id != ''",
+    "updateRule": "@request.auth.id != ''",
+    "deleteRule": null,
+    "fields": [
+      {"name": "name",                "type": "text",   "required": true,  "min": 1, "max": 100,   "pattern": ""},
+      {"name": "display_name",        "type": "text",   "required": false, "min": 0, "max": 200,   "pattern": ""},
+      {"name": "max_users",           "type": "number", "required": false, "min": 0, "max": 10000, "noDecimal": true},
+      {"name": "active",              "type": "bool",   "required": false},
+      {"name": "cred_source_default", "type": "text",   "required": false, "min": 0, "max": 40,    "pattern": ""}
+    ]
+  },
+  {
+    "name": "slots",
+    "type": "base",
+    "listRule":   "@request.auth.id != ''",
+    "viewRule":   "@request.auth.id != ''",
+    "createRule": "@request.auth.id != ''",
+    "updateRule": "@request.auth.id != ''",
+    "deleteRule": null,
+    "fields": [
+      {"name": "slot_name",            "type": "text",     "required": true,  "min": 1, "max": 100, "pattern": ""},
+      {"name": "group",                "type": "relation", "required": true,  "collectionId": "REPLACE_ME", "maxSelect": 1, "cascadeDelete": false},
+      {"name": "claim_code",           "type": "text",     "required": true,  "hidden": true, "min": 8, "max": 64, "pattern": ""},
+      {"name": "nomad_token_accessor", "type": "text",     "required": false, "min": 0, "max": 200, "pattern": ""},
+      {"name": "nomad_token_secret",   "type": "text",     "required": false, "hidden": true, "min": 0, "max": 200, "pattern": ""},
+      {"name": "minio_access_key",     "type": "text",     "required": false, "min": 0, "max": 100, "pattern": ""},
+      {"name": "minio_secret_key",     "type": "text",     "required": false, "hidden": true, "min": 0, "max": 200, "pattern": ""},
+      {"name": "state",                "type": "select",   "required": true,  "maxSelect": 1, "values": ["unclaimed","claimed","suspended","expired"]},
+      {"name": "claimed_by_name",      "type": "text",     "required": false, "min": 0, "max": 200, "pattern": ""},
+      {"name": "claimed_by_email",     "type": "email",    "required": false},
+      {"name": "claimed_at",           "type": "date",     "required": false},
+      {"name": "config_yaml",          "type": "text",     "required": false, "hidden": true, "min": 0, "max": 8192, "pattern": ""},
+      {"name": "config_yaml_at",       "type": "date",     "required": false},
+      {"name": "config_yaml_renderer", "type": "text",     "required": false, "min": 0, "max": 100, "pattern": ""},
+      {"name": "cred_source",          "type": "text",     "required": false, "min": 0, "max": 40,  "pattern": ""},
+      {"name": "opaque_token_hash",    "type": "text",     "required": false, "hidden": true, "min": 0, "max": 128, "pattern": ""}
+    ]
+  },
+  {
+    "name": "deletion_audit",
+    "type": "base",
+    "listRule":   "@request.auth.id != ''",
+    "viewRule":   "@request.auth.id != ''",
+    "createRule": "@request.auth.id != ''",
+    "updateRule": null,
+    "deleteRule": null,
+    "fields": [
+      {"name": "slot_name",  "type": "text", "required": true,  "min": 1, "max": 100,  "pattern": ""},
+      {"name": "group_name", "type": "text", "required": false, "min": 0, "max": 100,  "pattern": ""},
+      {"name": "deleted_by", "type": "text", "required": false, "min": 0, "max": 200,  "pattern": ""},
+      {"name": "reason",     "type": "text", "required": false, "min": 0, "max": 1000, "pattern": ""}
+    ]
+  }
+]
