@@ -102,6 +102,13 @@ func NewServer(cfg Config, logger *slog.Logger, build BuildInfo, up Upstreams) *
 	mux.HandleFunc("POST /secrets/put", s.handleSecretsPut)
 	mux.HandleFunc("POST /auth/secrets/get", s.handleSecretsGet)
 	mux.HandleFunc("POST /secrets/get", s.handleSecretsGet)
+
+	// KEK broker (ADR-0067 Amendment 2026-06-26). /keys/get = member-gated KEK
+	// release; /keys/mint = operator-gated mint/rotate into PB.
+	mux.HandleFunc("POST /auth/keys/get", s.handleKeysGet)
+	mux.HandleFunc("POST /keys/get", s.handleKeysGet)
+	mux.HandleFunc("POST /auth/keys/mint", s.handleKeysMint)
+	mux.HandleFunc("POST /keys/mint", s.handleKeysMint)
 	mux.HandleFunc("POST /slots/claim", s.handleSlotsClaim)
 	mux.HandleFunc("POST /auth/slots/claim", s.handleSlotsClaim)
 	mux.HandleFunc("POST /manage/slots/{slot}/suspend", s.handleManageSuspend)

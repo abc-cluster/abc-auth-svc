@@ -92,6 +92,12 @@ type Config struct {
 	// OperatorToken gates /manage/* (X-Operator-Token). Secret — env only.
 	OperatorToken string
 
+	// RootMKB64 is the base64 32-byte root master key that wraps per-group KEKs in
+	// PocketBase (ADR-0067 Amendment 2026-06-26). Secret — env only
+	// (ABC_AUTH_ROOT_MK), injected from Nomad Variable abc/keys/root/mk. Empty =
+	// managed encryption disabled (/keys/* answer 503).
+	RootMKB64 string
+
 	// Session (forward-auth) — SessionSecret is the HMAC key (secret, env only);
 	// cookie flags mirror the Python. ShadowValidateURL points /validate-shadow at
 	// the Python /validate for parity comparison (empty disables comparison).
@@ -173,6 +179,7 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.ClusterUploadEndpoint = getenvOr(getenv, "CLUSTER_UPLOAD_ENDPOINT", DefaultClusterUploadEndpoint)
 	cfg.ClusterAuthEndpoint = getenvOr(getenv, "CLUSTER_AUTH_ENDPOINT", DefaultClusterAuthEndpoint)
 	cfg.OperatorToken = strings.TrimSpace(getenv("OPERATOR_TOKEN")) // secret: env only
+	cfg.RootMKB64 = strings.TrimSpace(getenv("ABC_AUTH_ROOT_MK"))   // secret: env only — base64 32-byte KEK-envelope root MK
 	cfg.MinioConsoleURL = getenvOr(getenv, "MINIO_CONSOLE_URL", "http://localhost:9001")
 
 	// Session / cookie / shadow.
@@ -221,7 +228,7 @@ func LoadConfig(args []string, getenv func(string) string) (Config, error) {
 	cfg.HubPublicURL = *hubPublicURL
 
 	// Secrets feed the exact-value log scrub.
-	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword, cfg.OperatorToken, cfg.SessionSecret, cfg.NomadAdminToken} {
+	for _, sec := range []string{cfg.JupyterHubAdminToken, cfg.PBAdminPassword, cfg.OperatorToken, cfg.RootMKB64, cfg.SessionSecret, cfg.NomadAdminToken} {
 		if sec != "" {
 			cfg.ScrubSecrets = append(cfg.ScrubSecrets, sec)
 		}
