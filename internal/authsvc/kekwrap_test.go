@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,14 @@ func testMK(t *testing.T) []byte {
 		t.Fatalf("mk: %v", err)
 	}
 	return mk
+}
+
+// newKEK is a test helper for a 32-byte random secret (the production newKEK was
+// removed when managed keys became age X25519; wrapKEK now wraps arbitrary bytes).
+func newKEK() ([]byte, error) {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	return b, err
 }
 
 func TestKEKWrapRoundTrip(t *testing.T) {
@@ -84,11 +93,23 @@ func TestKEKWrapSaltUnique(t *testing.T) {
 	}
 }
 
-func TestKEKWrapRejectsBadSizes(t *testing.T) {
-	if _, err := wrapKEK(make([]byte, 16), "group:g", 1, make([]byte, kekLen)); err == nil {
+func TestKEKWrapRejectsBadInputs(t *testing.T) {
+	if _, err := wrapKEK(make([]byte, 16), "group:g", 1, make([]byte, 32)); err == nil {
 		t.Fatal("wrap must reject a non-32-byte MK")
 	}
-	if _, err := wrapKEK(make([]byte, mkLen), "group:g", 1, make([]byte, 16)); err == nil {
-		t.Fatal("wrap must reject a non-32-byte KEK")
+	if _, err := wrapKEK(make([]byte, mkLen), "group:g", 1, nil); err == nil {
+		t.Fatal("wrap must reject an empty secret")
+	}
+	// Arbitrary non-32-byte secrets are now valid (the age AGE-SECRET-KEY string
+	// is ~74 bytes). A 74-byte secret must round-trip.
+	mk := make([]byte, mkLen)
+	secret := []byte(strings.Repeat("k", 74))
+	wrapped, err := wrapKEK(mk, "group:g", 1, secret)
+	if err != nil {
+		t.Fatalf("wrap 74-byte secret: %v", err)
+	}
+	got, err := unwrapKEK(mk, "group:g", 1, wrapped)
+	if err != nil || !bytes.Equal(got, secret) {
+		t.Fatalf("round-trip 74-byte secret: got=%q err=%v", got, err)
 	}
 }

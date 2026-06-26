@@ -9,25 +9,28 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"filippo.io/age"
 )
 
-// kekGroup is one in-memory group record for the fake KEK store.
-type kekGroup struct {
-	name    string
-	wrapped string
-	version int
-	alg     string
+// keyGroup is one in-memory group record for the fake key store.
+type keyGroup struct {
+	name      string
+	recipient string // age1…
+	wrapped   string // root-MK-wrapped AGE-SECRET-KEY-1…
+	version   int
+	alg       string
 }
 
-// fakeKEKStore implements SlotStore + KEKStore for the keys handler tests.
-type fakeKEKStore struct {
+// fakeKeyStore implements SlotStore + KeyStore for the keys handler tests.
+type fakeKeyStore struct {
 	slot    *Slot                // the authenticated caller (nil = invalid token)
-	groups  map[string]*kekGroup // groupID -> record
-	readErr error                // forces GroupKEKRecord to fail
+	groups  map[string]*keyGroup // groupID -> record
+	readErr error                // forces GroupKeyRecord to fail
 }
 
-func (f *fakeKEKStore) FindSlot(context.Context, string) (*Slot, error) { return f.slot, nil }
-func (f *fakeKEKStore) GroupName(_ context.Context, slot *Slot) string {
+func (f *fakeKeyStore) FindSlot(context.Context, string) (*Slot, error) { return f.slot, nil }
+func (f *fakeKeyStore) GroupName(_ context.Context, slot *Slot) string {
 	if slot != nil {
 		if g := f.groups[slot.Group]; g != nil {
 			return g.name
@@ -36,24 +39,24 @@ func (f *fakeKEKStore) GroupName(_ context.Context, slot *Slot) string {
 	}
 	return ""
 }
-func (f *fakeKEKStore) CachedSlotState(context.Context, string) string { return "claimed" }
+func (f *fakeKeyStore) CachedSlotState(context.Context, string) string { return "claimed" }
 
-func (f *fakeKEKStore) GroupKEKRecord(_ context.Context, groupID string) (name, wrapped string, version int, alg string, hasKEK bool, err error) {
+func (f *fakeKeyStore) GroupKeyRecord(_ context.Context, groupID string) (name, recipient, wrapped string, version int, alg string, hasKey bool, err error) {
 	if f.readErr != nil {
-		return "", "", 0, "", false, f.readErr
+		return "", "", "", 0, "", false, f.readErr
 	}
 	g := f.groups[groupID]
 	if g == nil {
-		return "", "", 0, "", false, fmt.Errorf("group_not_found")
+		return "", "", "", 0, "", false, fmt.Errorf("group_not_found")
 	}
-	return g.name, g.wrapped, g.version, g.alg, g.wrapped != "", nil
+	return g.name, g.recipient, g.wrapped, g.version, g.alg, g.recipient != "" && g.wrapped != "", nil
 }
-func (f *fakeKEKStore) PutGroupKEK(_ context.Context, groupID, wrapped string, version int, alg string) error {
+func (f *fakeKeyStore) PutGroupKey(_ context.Context, groupID, recipient, wrapped string, version int, alg string) error {
 	g := f.groups[groupID]
 	if g == nil {
 		return fmt.Errorf("group_not_found")
 	}
-	g.wrapped, g.version, g.alg = wrapped, version, alg
+	g.recipient, g.wrapped, g.version, g.alg = recipient, wrapped, version, alg
 	return nil
 }
 
@@ -88,12 +91,13 @@ func opHdrs() map[string]string {
 	return h
 }
 
-// TestKeys_MintThenGet_RoundTrip is the core: operator mints a group KEK, then a
-// member of that group releases it via /keys/get and gets a 32-byte key.
+// TestKeys_MintThenGet_RoundTrip is the core: operator mints a group age keypair,
+// then a member releases it via /keys/get and gets a valid age identity whose
+// recipient matches what mint stored.
 func TestKeys_MintThenGet_RoundTrip(t *testing.T) {
-	store := &fakeKEKStore{
+	store := &fakeKeyStore{
 		slot:   &Slot{ID: "s1", SlotName: "slot-a", Group: "gidA", State: "claimed"},
-		groups: map[string]*kekGroup{"gidA": {name: "abc-grp-a"}},
+		groups: map[string]*keyGroup{"gidA": {name: "abc-grp-a"}},
 	}
 	s := keysServer(t, store, testMKB64())
 
@@ -103,15 +107,19 @@ func TestKeys_MintThenGet_RoundTrip(t *testing.T) {
 		t.Fatalf("mint status=%d err=%q", rr.Code, decodeErr(t, rr))
 	}
 	var mint struct {
-		KekID   string `json:"kek_id"`
-		Version int    `json:"version"`
+		KekID     string `json:"kek_id"`
+		Version   int    `json:"version"`
+		Recipient string `json:"recipient"`
 	}
 	_ = json.Unmarshal(rr.Body.Bytes(), &mint)
 	if mint.KekID != "group:abc-grp-a" || mint.Version != 1 {
 		t.Fatalf("mint kek_id=%q version=%d", mint.KekID, mint.Version)
 	}
-	if store.groups["gidA"].wrapped == "" {
-		t.Fatal("mint did not write wrapped KEK to PB")
+	if store.groups["gidA"].wrapped == "" || store.groups["gidA"].recipient == "" {
+		t.Fatal("mint did not write recipient + wrapped secret to PB")
+	}
+	if !strings.HasPrefix(mint.Recipient, "age1") {
+		t.Fatalf("mint recipient %q is not an age recipient", mint.Recipient)
 	}
 
 	// get (member of group A)
@@ -120,9 +128,10 @@ func TestKeys_MintThenGet_RoundTrip(t *testing.T) {
 		t.Fatalf("get status=%d err=%q", rr.Code, decodeErr(t, rr))
 	}
 	var got struct {
-		KekID   string `json:"kek_id"`
-		Version int    `json:"version"`
-		KEK     string `json:"kek"`
+		KekID     string `json:"kek_id"`
+		Version   int    `json:"version"`
+		Recipient string `json:"recipient"`
+		Identity  string `json:"identity"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -130,17 +139,28 @@ func TestKeys_MintThenGet_RoundTrip(t *testing.T) {
 	if got.KekID != "group:abc-grp-a" || got.Version != 1 {
 		t.Fatalf("get kek_id=%q version=%d", got.KekID, got.Version)
 	}
-	raw, err := base64.StdEncoding.DecodeString(got.KEK)
-	if err != nil || len(raw) != kekLen {
-		t.Fatalf("released KEK is not 32 bytes: len=%d err=%v", len(raw), err)
+	if got.Recipient != store.groups["gidA"].recipient {
+		t.Fatalf("released recipient %q != stored %q", got.Recipient, store.groups["gidA"].recipient)
+	}
+	// The released identity must parse and its recipient must match.
+	ids, err := age.ParseIdentities(strings.NewReader(got.Identity))
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("released identity does not parse: err=%v n=%d", err, len(ids))
+	}
+	x, ok := ids[0].(*age.X25519Identity)
+	if !ok {
+		t.Fatalf("released identity is not X25519: %T", ids[0])
+	}
+	if x.Recipient().String() != got.Recipient {
+		t.Fatalf("identity recipient %q != released recipient %q", x.Recipient().String(), got.Recipient)
 	}
 }
 
-// TestKeys_CrossGroupDenied: a member of group A asking for group B's KEK is 403.
+// TestKeys_CrossGroupDenied: a member of group A asking for group B's key is 403.
 func TestKeys_CrossGroupDenied(t *testing.T) {
-	store := &fakeKEKStore{
+	store := &fakeKeyStore{
 		slot:   &Slot{ID: "s1", SlotName: "slot-a", Group: "gidA", State: "claimed"},
-		groups: map[string]*kekGroup{"gidA": {name: "abc-grp-a", wrapped: "x", version: 1}},
+		groups: map[string]*keyGroup{"gidA": {name: "abc-grp-a", recipient: "age1x", wrapped: "x", version: 1}},
 	}
 	s := keysServer(t, store, testMKB64())
 	rr := post(t, s, "/keys/get", `{"kek_id":"group:abc-grp-b"}`, bearer("abco_x"))
@@ -149,22 +169,22 @@ func TestKeys_CrossGroupDenied(t *testing.T) {
 	}
 }
 
-// TestKeys_GetNotProvisioned: a member of a group with no KEK yet gets 404.
+// TestKeys_GetNotProvisioned: a member of a group with no key yet gets 404.
 func TestKeys_GetNotProvisioned(t *testing.T) {
-	store := &fakeKEKStore{
+	store := &fakeKeyStore{
 		slot:   &Slot{ID: "s1", SlotName: "slot-a", Group: "gidA", State: "claimed"},
-		groups: map[string]*kekGroup{"gidA": {name: "abc-grp-a"}}, // no wrapped KEK
+		groups: map[string]*keyGroup{"gidA": {name: "abc-grp-a"}}, // no key
 	}
 	s := keysServer(t, store, testMKB64())
 	rr := post(t, s, "/keys/get", "", bearer("abco_x"))
-	if rr.Code != http.StatusNotFound || !strings.Contains(decodeErr(t, rr), "kek_not_provisioned") {
-		t.Fatalf("status=%d err=%q (want 404 kek_not_provisioned)", rr.Code, decodeErr(t, rr))
+	if rr.Code != http.StatusNotFound || !strings.Contains(decodeErr(t, rr), "key_not_provisioned") {
+		t.Fatalf("status=%d err=%q (want 404 key_not_provisioned)", rr.Code, decodeErr(t, rr))
 	}
 }
 
 // TestKeys_MintRequiresOperator: /keys/mint without the operator token is 401.
 func TestKeys_MintRequiresOperator(t *testing.T) {
-	store := &fakeKEKStore{groups: map[string]*kekGroup{"gidA": {name: "abc-grp-a"}}}
+	store := &fakeKeyStore{groups: map[string]*keyGroup{"gidA": {name: "abc-grp-a"}}}
 	s := keysServer(t, store, testMKB64())
 	rr := post(t, s, "/keys/mint", `{"group_id":"gidA"}`, bearer("abco_x")) // no X-Operator-Token
 	if rr.Code != http.StatusUnauthorized {
@@ -174,9 +194,9 @@ func TestKeys_MintRequiresOperator(t *testing.T) {
 
 // TestKeys_UnconfiguredMK: with no root MK, /keys/get is 503.
 func TestKeys_UnconfiguredMK(t *testing.T) {
-	store := &fakeKEKStore{
+	store := &fakeKeyStore{
 		slot:   &Slot{ID: "s1", SlotName: "slot-a", Group: "gidA", State: "claimed"},
-		groups: map[string]*kekGroup{"gidA": {name: "abc-grp-a", wrapped: "x", version: 1}},
+		groups: map[string]*keyGroup{"gidA": {name: "abc-grp-a", recipient: "age1x", wrapped: "x", version: 1}},
 	}
 	s := keysServer(t, store, "") // no MK
 	rr := post(t, s, "/keys/get", "", bearer("abco_x"))
@@ -187,7 +207,7 @@ func TestKeys_UnconfiguredMK(t *testing.T) {
 
 // TestKeys_GetRequiresBearer: no Authorization header → 401.
 func TestKeys_GetRequiresBearer(t *testing.T) {
-	store := &fakeKEKStore{groups: map[string]*kekGroup{}}
+	store := &fakeKeyStore{groups: map[string]*keyGroup{}}
 	s := keysServer(t, store, testMKB64())
 	rr := post(t, s, "/keys/get", "", nil)
 	if rr.Code != http.StatusUnauthorized || !strings.Contains(decodeErr(t, rr), "missing_bearer_token") {
@@ -195,12 +215,12 @@ func TestKeys_GetRequiresBearer(t *testing.T) {
 	}
 }
 
-// TestKeys_MintRotatesVersion: minting twice bumps the version and keeps it
-// unwrappable at the new version.
+// TestKeys_MintRotatesVersion: minting twice bumps the version and the new keypair
+// is still releasable + valid.
 func TestKeys_MintRotatesVersion(t *testing.T) {
-	store := &fakeKEKStore{
+	store := &fakeKeyStore{
 		slot:   &Slot{ID: "s1", SlotName: "slot-a", Group: "gidA", State: "claimed"},
-		groups: map[string]*kekGroup{"gidA": {name: "abc-grp-a"}},
+		groups: map[string]*keyGroup{"gidA": {name: "abc-grp-a"}},
 	}
 	s := keysServer(t, store, testMKB64())
 	_ = post(t, s, "/keys/mint", `{"group_id":"gidA"}`, opHdrs())
@@ -212,7 +232,6 @@ func TestKeys_MintRotatesVersion(t *testing.T) {
 	if mint.Version != 2 {
 		t.Fatalf("second mint version=%d (want 2)", mint.Version)
 	}
-	// get must still work at the new version
 	rr = post(t, s, "/keys/get", "", bearer("abco_x"))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("get after rotate: status=%d err=%q", rr.Code, decodeErr(t, rr))

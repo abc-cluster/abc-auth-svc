@@ -32,9 +32,8 @@ import (
 
 const (
 	kekWrapLabel = "abc-kek-wrap-v1"        // HKDF info + AAD domain-separation prefix
-	KEKWrapAlg   = "aes256-gcm-hkdf-sha256" // stored in kek_alg; lets us evolve the construction
+	KEKWrapAlg   = "aes256-gcm-hkdf-sha256" // stored in <key>_alg; lets us evolve the construction
 	mkLen        = 32                       // root MK is 32 bytes
-	kekLen       = 32                       // a KEK is 32 bytes
 	wrapSaltLen  = 16
 )
 
@@ -43,14 +42,16 @@ func kekWrapAAD(kekID string, version int) string {
 	return kekWrapLabel + "|" + kekID + "|" + strconv.Itoa(version)
 }
 
-// wrapKEK encrypts a raw KEK under the root MK, binding kek_id+version. Output
-// is base64(salt || nonce || ciphertext+tag) for storage in PB.
+// wrapKEK encrypts a secret (a per-group age X25519 private key, since ADR-0067
+// Amendment 2) under the root MK, binding kek_id+version. Output is
+// base64(salt || nonce || ciphertext+tag) for storage in PB. Any non-empty
+// plaintext length is accepted (the secret is the age `AGE-SECRET-KEY-1…` string).
 func wrapKEK(mk []byte, kekID string, version int, kek []byte) (string, error) {
 	if len(mk) != mkLen {
 		return "", fmt.Errorf("root MK must be %d bytes, got %d", mkLen, len(mk))
 	}
-	if len(kek) != kekLen {
-		return "", fmt.Errorf("KEK must be %d bytes, got %d", kekLen, len(kek))
+	if len(kek) == 0 {
+		return "", fmt.Errorf("secret to wrap must not be empty")
 	}
 	salt := make([]byte, wrapSaltLen)
 	if _, err := rand.Read(salt); err != nil {
@@ -110,10 +111,7 @@ func unwrapKEK(mk []byte, kekID string, version int, wrapped string) ([]byte, er
 	ct := rest[ns:]
 	kek, err := gcm.Open(nil, nonce, ct, []byte(aad))
 	if err != nil {
-		return nil, fmt.Errorf("unwrap failed (wrong MK or tampered KEK): %w", err)
-	}
-	if len(kek) != kekLen {
-		return nil, fmt.Errorf("unwrapped KEK has wrong length %d", len(kek))
+		return nil, fmt.Errorf("unwrap failed (wrong MK or tampered secret): %w", err)
 	}
 	return kek, nil
 }
@@ -128,13 +126,4 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 		return nil, fmt.Errorf("gcm: %w", err)
 	}
 	return gcm, nil
-}
-
-// newKEK generates a fresh 32-byte KEK from the CSPRNG.
-func newKEK() ([]byte, error) {
-	kek := make([]byte, kekLen)
-	if _, err := rand.Read(kek); err != nil {
-		return nil, fmt.Errorf("generate KEK: %w", err)
-	}
-	return kek, nil
 }
