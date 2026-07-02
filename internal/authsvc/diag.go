@@ -19,13 +19,13 @@ import (
 // (auth, JH, host provisioning) — the alternative is the journalctl + ssh +
 // alloc-exec sequence that surfaced both Bug A and Bug B on 2026-06-09.
 type SlotDiagReport struct {
-	Slot              string         `json:"slot"`
-	PB                map[string]any `json:"pb"`
-	JH                map[string]any `json:"jh"`
-	Host              map[string]any `json:"host"`
-	Checks            []DiagCheck    `json:"checks"`
-	Verdict           string         `json:"verdict"`
-	RemediationHints  []string       `json:"remediation_hints"`
+	Slot             string         `json:"slot"`
+	PB               map[string]any `json:"pb"`
+	JH               map[string]any `json:"jh"`
+	Host             map[string]any `json:"host"`
+	Checks           []DiagCheck    `json:"checks"`
+	Verdict          string         `json:"verdict"`
+	RemediationHints []string       `json:"remediation_hints"`
 }
 
 // DiagCheck is one named readiness check.

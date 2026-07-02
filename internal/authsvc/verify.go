@@ -11,7 +11,9 @@ import (
 //
 // Auth: X-Nomad-Token or Authorization: Bearer <token>.
 // 200 OK  → token validates; sets X-Auth-User / X-Auth-Group / X-Auth-Namespace
-//	 / X-Auth-Policies / X-Auth-Type headers and writes "ok\n" body.
+//
+//	/ X-Auth-Policies / X-Auth-Type headers and writes "ok\n" body.
+//
 // 401 → no token or token rejected by Nomad.
 //
 // The header names + decoding logic deliberately match the Python service;

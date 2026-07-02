@@ -69,6 +69,8 @@ tags:
     description: External-integrator forward-auth used by Traefik / observability sidecars.
   - name: secrets
     description: Per-slot opaque secret broker on top of Nomad Variables.
+  - name: keys
+    description: Managed group age (X25519) key broker (ADR-0067 Amendment) — release the caller's group identity, or operator-mint/rotate a group's keypair.
   - name: log-level
     description: Runtime log-level introspection and mutation.
 
@@ -761,6 +763,7 @@ paths:
       tags: [verify]
       summary: External-integrator forward-auth (Nomad-token-driven)
       operationId: verifyPost
+      x-aliases: ["/verify-namespace"]
       description: Identical to GET. Body, if any, is ignored.
       security: [{ nomadBearer: [] }, { nomadHeaderToken: [] }]
       responses:
@@ -832,6 +835,132 @@ paths:
         "500":
           description: Store unconfigured or Nomad read failed.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /keys/get:
+    post:
+      tags: [keys]
+      summary: Release the caller's group age identity + recipient
+      operationId: keysGet
+      x-aliases: ["/auth/keys/get"]
+      security: [{ opaqueBearer: [] }]
+      description: |
+        Member-gated. Releases the age keypair (native X25519 — no plugin, no bespoke stanza) belonging to the caller's own group, so the
+        client can decrypt/encrypt directly with stock `age`. Membership is intrinsic: a slot belongs to exactly one group, so releasing
+        only the caller's own group's identity IS the cross-group boundary — there is no separate ACL check beyond slot→group resolution.
+        If the request body includes `kek_id`, it MUST name the caller's own group or the request is rejected with `403 not_a_member`.
+        The returned `identity` (the group's private key) is never logged; only a coarse "released" audit row is written.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeysGetRequest" }
+      responses:
+        "200":
+          description: Group key material released.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeysGetResponse" }
+        "400":
+          description: Malformed JSON body.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "401":
+          description: Bearer missing, empty or invalid.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Caller-supplied `kek_id` does not name the caller's own group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                notAMember: { value: { error: "not_a_member" } }
+        "404":
+          description: Group has no provisioned key — group keys are never lazily minted, only via `/keys/mint` at group creation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                notProvisioned: { value: { error: "key_not_provisioned" } }
+        "409":
+          description: Caller's slot has no group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                noGroup: { value: { error: "slot_has_no_group" } }
+        "500":
+          description: Store unconfigured, key read failed, or key unwrap failed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "503":
+          description: Managed encryption unconfigured (no root master key).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                unconfigured: { value: { error: "managed_encryption_unconfigured" } }
+
+  /keys/mint:
+    post:
+      tags: [keys]
+      summary: Mint or rotate a group's age keypair
+      operationId: keysMint
+      x-aliases: ["/auth/keys/mint"]
+      security: [{ operatorToken: [] }]
+      description: |
+        Operator-gated. Generates a fresh native age X25519 keypair for the named group: the public recipient is stored plaintext, the
+        private key is wrapped under the server's root master key, both persisted in PocketBase. Called at group creation; group keys are
+        never lazily minted by `/keys/get`.
+
+        **Rotation caveat (known limitation, tracked for a future amendment).** Calling `/keys/mint` again for a group that already has a
+        key computes `version = prevVersion + 1` and returns that new version number, but the underlying store is a **single-record PATCH**
+        onto the group's `age_recipient`/`age_sk_wrapped`/`age_key_version` fields — there is no multi-version history table. The previous
+        key material is overwritten in place, not retained. Any data encrypted under the prior version becomes undecryptable via `/keys/get`
+        after a rotate (which always returns the current single record). `/keys/get` is also not version-aware — it has no way to request an
+        older version even if one were retained. Treat `/keys/mint` as effectively **non-rotatable in practice** until this is amended.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeysMintRequest" }
+      responses:
+        "200":
+          description: Key minted or rotated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeysMintResponse" }
+        "400":
+          description: Malformed body or missing `group_id`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                missingGroupID: { value: { error: "group_id_required" } }
+        "401":
+          description: Operator token missing or invalid.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "404":
+          description: No group record at the given `group_id`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                groupNotFound: { value: { error: "group_not_found" } }
+        "409":
+          description: Group record has no name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                noName: { value: { error: "group_has_no_name" } }
+        "500":
+          description: Store unconfigured, key generation failed, key wrap failed, or PocketBase write failed.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "503":
+          description: Managed encryption unconfigured (no root master key).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+              examples:
+                unconfigured: { value: { error: "managed_encryption_unconfigured" } }
 
   /manage/log-level:
     get:
@@ -1268,6 +1397,49 @@ components:
       additionalProperties: false
       properties:
         value: { type: string }
+
+    KeysGetRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        kek_id:
+          type: string
+          description: |
+            Optional. If supplied, MUST equal the caller's own group's `kek_id` (`group:<name>`) or the request is rejected with
+            `403 not_a_member`. Omit unless you already know your own `kek_id` and want the server to assert it matches.
+
+    KeysGetResponse:
+      type: object
+      required: [kek_id, version, recipient, identity]
+      additionalProperties: false
+      properties:
+        kek_id:    { type: string, description: "`group:<name>`, derived server-side from the group record." }
+        version:   { type: integer, description: "Key version currently on record for this group." }
+        recipient: { type: string, description: "age1… public recipient — safe to share; collaborators encrypt to this." }
+        identity:
+          type: string
+          description: |
+            `AGE-SECRET-KEY-1…` — the group's private key. Sensitive: never logged by the reference implementation and MUST NOT be logged
+            by any conformant client or intermediary.
+
+    KeysMintRequest:
+      type: object
+      required: [group_id]
+      additionalProperties: false
+      properties:
+        group_id:
+          type: string
+          description: PocketBase record id of the group (not the group name).
+
+    KeysMintResponse:
+      type: object
+      required: [kek_id, version, recipient, minted]
+      additionalProperties: false
+      properties:
+        kek_id:    { type: string, description: "`group:<name>`, derived server-side from the group record." }
+        version:   { type: integer, description: "1 for a group's first key; prevVersion + 1 on a repeat mint (see the rotation caveat on this operation — the prior version's key material is not retained)." }
+        recipient: { type: string, description: "age1… public recipient of the newly minted key." }
+        minted:    { type: boolean, const: true }
 
     LogLevelInfo:
       type: object
