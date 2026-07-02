@@ -139,7 +139,18 @@ Status legend in §1: **MUST** = blocking, **SHOULD** = expected by callers in t
 | K-03 | `secrets/get` on a non-existent key MUST return 404 `not_found` (not 200 with empty value, not 500). | MUST |
 | K-04 | The `group` override field on `secrets/put` MUST resolve to namespace `su-<group>` or `default` for empty string. `secrets/get` has no group override; it always uses the slot's primary group. | MUST |
 
-### 1.13 Log level
+### 1.13 Keys broker
+
+| ID | Requirement | Status |
+|---|---|---|
+| KY-01 | `keys/get` MUST resolve the caller's group from their slot, not from any client-supplied field. An optional `kek_id` in the request body MUST be verified to match the caller's own group's `kek_id` (`group:<name>`); mismatch MUST return 403 `not_a_member`. | MUST |
+| KY-02 | `keys/get` MUST return 409 `slot_has_no_group` when the caller's slot has no group, and 404 `key_not_provisioned` when the group has no key on record. Group keys MUST NOT be lazily minted by `keys/get`. | MUST |
+| KY-03 | The `identity` field in `keys/get`'s response (the group's private key) MUST NOT appear in server logs. Only a coarse "released" audit event (slot, `kek_id`, version — no key material) MAY be logged. | MUST |
+| KY-04 | `keys/mint` MUST require the operator token; it MUST NOT be reachable via any member-level credential. | MUST |
+| KY-05 | A repeat `keys/mint` call for a group that already has a key MUST NOT be relied upon to retain the prior version's key material — the reference implementation overwrites the single stored record in place even though it returns an incremented `version`. Data encrypted under a prior version becomes undecryptable via `keys/get` after a repeat mint. Implementations MAY improve on this (true multi-version retention) but conformant clients MUST NOT assume it. | MUST |
+| KY-06 | Both `keys/get` and `keys/mint` MUST return 503 `managed_encryption_unconfigured` when no root master key is configured, rather than a 500 or a silent no-op. | MUST |
+
+### 1.14 Log level
 
 | ID | Requirement | Status |
 |---|---|---|
@@ -147,7 +158,7 @@ Status legend in §1: **MUST** = blocking, **SHOULD** = expected by callers in t
 | L-02 | Setting an unknown level MUST return `400 { "error": "invalid_level", "allowed": ["info","debug","trace"] }`. | MUST |
 | L-03 | When the implementation has no mutable level (test mode), `POST /manage/log-level` MUST return 409 `level_not_mutable`. | MUST |
 
-### 1.14 Versioning policy
+### 1.15 Versioning policy
 
 | ID | Requirement | Status |
 |---|---|---|
