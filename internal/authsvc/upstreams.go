@@ -99,9 +99,8 @@ func (mockNomadAdmin) VarPut(_ context.Context, _, _, _ string) error { return n
 func (mockNomadAdmin) CreateToken(_ context.Context, slot, _ string) (string, string, error) {
 	return "mock-accessor-" + slot, "mock-secret-" + slot, nil
 }
-func (mockNomadAdmin) DeleteToken(_ context.Context, _ string) error          { return nil }
-func (mockNomadAdmin) GetRoleID(_ context.Context, _ string) (string, error)  { return "mock-role", nil }
-
+func (mockNomadAdmin) DeleteToken(_ context.Context, _ string) error         { return nil }
+func (mockNomadAdmin) GetRoleID(_ context.Context, _ string) (string, error) { return "mock-role", nil }
 
 type mockNomad struct{}
 

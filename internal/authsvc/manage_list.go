@@ -9,15 +9,15 @@ import (
 // operator-facing GET endpoints. Mirrors the field allowlist the Python
 // service's _manage_list_slots / _manage_get_slot publish.
 type publicSlot struct {
-	ID               string `json:"id"`
-	SlotName         string `json:"slot_name"`
-	Group            string `json:"group,omitempty"`
-	GroupName        string `json:"group_name,omitempty"`
-	State            string `json:"state"`
-	CredSource       string `json:"cred_source,omitempty"`
-	MinioAccessKey   string `json:"minio_access_key,omitempty"`
-	ConfigYAMLAt     string `json:"config_yaml_at,omitempty"`
-	OpaqueTokenHash  string `json:"opaque_token_hash,omitempty"`
+	ID              string `json:"id"`
+	SlotName        string `json:"slot_name"`
+	Group           string `json:"group,omitempty"`
+	GroupName       string `json:"group_name,omitempty"`
+	State           string `json:"state"`
+	CredSource      string `json:"cred_source,omitempty"`
+	MinioAccessKey  string `json:"minio_access_key,omitempty"`
+	ConfigYAMLAt    string `json:"config_yaml_at,omitempty"`
+	OpaqueTokenHash string `json:"opaque_token_hash,omitempty"`
 }
 
 func toPublicSlot(s Slot) publicSlot {

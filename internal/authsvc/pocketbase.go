@@ -18,22 +18,22 @@ import (
 // fields (nomad_token_secret, minio_secret_key) are part of the /auth/exchange
 // payload by design — they must be returned to the caller but never logged.
 type Slot struct {
-	ID                  string `json:"id"`
-	SlotName            string `json:"slot_name"`
-	Group               string `json:"group"`      // relation id
-	GroupName           string `json:"group_name"` // sometimes denormalised onto the record
-	NomadTokenSecret    string `json:"nomad_token_secret"`
-	NomadTokenAccessor  string `json:"nomad_token_accessor"`
-	MinioAccessKey      string `json:"minio_access_key"`
-	MinioSecretKey      string `json:"minio_secret_key"`
-	State               string `json:"state"`
-	CredSource          string `json:"cred_source"`
-	OpaqueTokenHash     string `json:"opaque_token_hash"`
-	ConfigYAML          string `json:"config_yaml"`
-	ClaimCode           string `json:"claim_code"`
-	ClaimedByName       string `json:"claimed_by_name"`
-	ClaimedByEmail      string `json:"claimed_by_email"`
-	ClaimedAt           string `json:"claimed_at"`
+	ID                 string `json:"id"`
+	SlotName           string `json:"slot_name"`
+	Group              string `json:"group"`      // relation id
+	GroupName          string `json:"group_name"` // sometimes denormalised onto the record
+	NomadTokenSecret   string `json:"nomad_token_secret"`
+	NomadTokenAccessor string `json:"nomad_token_accessor"`
+	MinioAccessKey     string `json:"minio_access_key"`
+	MinioSecretKey     string `json:"minio_secret_key"`
+	State              string `json:"state"`
+	CredSource         string `json:"cred_source"`
+	OpaqueTokenHash    string `json:"opaque_token_hash"`
+	ConfigYAML         string `json:"config_yaml"`
+	ClaimCode          string `json:"claim_code"`
+	ClaimedByName      string `json:"claimed_by_name"`
+	ClaimedByEmail     string `json:"claimed_by_email"`
+	ClaimedAt          string `json:"claimed_at"`
 }
 
 // SlotStore is the read-path slot/group access the common handlers depend on
