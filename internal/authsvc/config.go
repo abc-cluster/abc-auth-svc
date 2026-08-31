@@ -71,7 +71,7 @@ type Config struct {
 	HubPublicURL         string
 
 	// MinIO admin shellout — Python uses /usr/local/bin/mcli with alias sdroot;
-	// override via MCLI_BIN / MCLI_ALIAS for local dev (no env files on aither).
+	// override via MCLI_BIN / MCLI_ALIAS for local dev (no env files on the deployment host).
 	MCLIBinary string
 	MCLIAlias  string
 

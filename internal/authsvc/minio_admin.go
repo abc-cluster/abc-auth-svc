@@ -13,9 +13,9 @@ import (
 // /manage/slots/{rotate,suspend,reactivate}. The reference implementation
 // shells out to the MinIO Client (`mcli admin user ...`) the same way the
 // Python service does, with the same `sdroot` alias already configured at
-// /root/.mcli/config.json on aither. Going through the binary keeps us out
+// /root/.mcli/config.json on the deployment host. Going through the binary keeps us out
 // of MinIO's Sig V4 admin API (saves several hundred lines of HMAC
-// machinery for an aither-only service).
+// machinery for a single-host service).
 type MinIOAdmin interface {
 	// RotateSecret regenerates the secret key for user. Returns the new
 	// secret. mcli admin user add is idempotent — it overwrites the secret
