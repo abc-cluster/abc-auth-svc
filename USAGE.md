@@ -12,7 +12,7 @@ abc-auth-svc -listen 127.0.0.1:4182 -log-level debug
 # env form (Nomad injects these)
 ABC_AUTH_LISTEN=127.0.0.1:4182 ABC_AUTH_LOG_LEVEL=info abc-auth-svc
 
-# local dev with stubbed upstreams (Phase 1+)
+# local dev with stubbed upstreams — no cluster required
 abc-auth-svc -mock-upstreams
 
 # print build identity
@@ -31,7 +31,7 @@ abc-auth-svc -version
 Precedence: flags > env > defaults. **Secrets are never passed as flags** — they
 come from env only (injected by Nomad Variables) and are scrubbed from logs.
 
-## Endpoints (Phase 0)
+## Endpoints
 
 | Method | Path | Response |
 |---|---|---|
@@ -59,12 +59,19 @@ request:
 - Every record passes through the redacting handler (Bearer tokens, tailscale
   keys, PEM blocks, `scheme://user:pass@…` are scrubbed wherever they appear).
 
-Set `-log-level debug` to also see HTTP-layer detail once upstreams are wired
-(Phase 1+).
+Set `-log-level debug` to also see HTTP-layer detail for the brokered upstreams.
 
-## Deployment (migration)
+## Deployment
 
-Runs on `:4182` beside the Python `abc-auth-svc` on `:4181`. Caddy routes
-specific paths to the Go service as each phase lands; everything else stays on
-Python. Roll back any phase by reverting one Caddy per-path rule. The Nomad job
-spec lives in `abc-deployments` (versioned source of truth — no more `scp` drift).
+The service is a single static binary and expects to run beside the workbench it
+guards. A deployment supplies:
+
+- the upstream endpoints and secrets listed in the configuration table of
+  [README.md](README.md), by environment;
+- a reverse proxy that sends workbench requests through `/validate` before
+  passing them to JupyterHub;
+- a writable PocketBase instance for slot state.
+
+Nothing else is assumed. The binary holds no state of its own, so restarting it
+is safe at any time and sessions survive because they are signed rather than
+stored in memory.
