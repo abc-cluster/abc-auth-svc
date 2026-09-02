@@ -27,8 +27,8 @@ info:
     name: ABC-cluster
     url: https://github.com/abc-cluster/abc-auth-svc
   license:
-    name: Apache-2.0
-    url: https://www.apache.org/licenses/LICENSE-2.0
+    name: EPL-2.0
+    url: https://www.eclipse.org/legal/epl-2.0/
   x-contract-name: seedling/v1
   x-implementations:
     - name: abc-auth-svc
