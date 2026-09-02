@@ -67,6 +67,36 @@ func TestGroupsFromPolicies(t *testing.T) {
 	}
 }
 
+// nsGuess resolves both "member-<ns>" and "<ns>-member" to the same namespace,
+// so the group name reported for them should agree too. Before this, the prefix
+// form came back as "member-su-foo" while its namespace resolved to "su-foo".
+func TestGroupsFromPoliciesPrefixAndSuffixFormsAgree(t *testing.T) {
+	prefixForm := groupsFromPolicies("member-su-mbhg-hostgen")
+	suffixForm := groupsFromPolicies("su-mbhg-hostgen-member")
+	if len(prefixForm) != 1 || prefixForm[0] != "mbhg-hostgen" {
+		t.Errorf("member-su-mbhg-hostgen = %v, want [mbhg-hostgen]", prefixForm)
+	}
+	if len(suffixForm) != 1 || suffixForm[0] != "mbhg-hostgen" {
+		t.Errorf("su-mbhg-hostgen-member = %v, want [mbhg-hostgen]", suffixForm)
+	}
+	// Both shapes name the same group, so they must dedupe to one entry.
+	if both := groupsFromPolicies("member-su-mbhg-hostgen,su-mbhg-hostgen-member"); len(both) != 1 {
+		t.Errorf("the two shapes of one group = %v, want a single entry", both)
+	}
+}
+
+// A group whose own name ends in "-group" is why "-group-admin" is not in the
+// suffix list: "su-multi-group-admin" is the group "multi-group" with an -admin
+// suffix, indistinguishable by shape from "<group>-group-admin". Pinning this
+// keeps a future suffix addition from silently truncating it to "multi".
+func TestGroupsFromPoliciesKeepsGroupSuffixedNames(t *testing.T) {
+	for _, policy := range []string{"su-multi-group-member", "su-multi-group-admin", "su-multi-group-pool"} {
+		if g := groupsFromPolicies(policy); len(g) != 1 || g[0] != "multi-group" {
+			t.Errorf("%s = %v, want [multi-group]", policy, g)
+		}
+	}
+}
+
 func TestNomadIdentity(t *testing.T) {
 	// management
 	id := nomadIdentity(&NomadTokenSelf{Name: "root", Type: "management"})

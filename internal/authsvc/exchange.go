@@ -90,7 +90,7 @@ func (s *Server) handleAuthExchange(w http.ResponseWriter, r *http.Request) {
 	group := s.up.Store.GroupName(ctx, slot)
 	namespace := ""
 	if group != "" {
-		namespace = "su-" + group
+		namespace = namespaceForGroup(group)
 	}
 
 	bundle := credsBundle{
