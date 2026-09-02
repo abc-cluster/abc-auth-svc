@@ -60,9 +60,17 @@ func nomadIdentity(info *NomadTokenSelf) identity {
 }
 
 // groupsFromPolicies derives a sorted list of clean group names from a
-// comma-separated policy string, stripping su- prefix and -pool/-admin/-member
-// suffixes. Management → ["*"]. Role references are skipped (need MinIO-group
-// expansion, deferred). Parity port of the Python _groups_from_policies.
+// comma-separated policy string, stripping the su- and member- prefixes and the
+// -pool/-admin/-member suffixes. Management → ["*"]. Role references are skipped
+// (need MinIO-group expansion, deferred). Parity port of the Python
+// _groups_from_policies, which strips the su- prefix only.
+//
+// Known limitation: a "<ns>-group-admin" policy keeps a trailing "-group", so
+// "su-mbhg-bioinformatics-group-admin" reports "mbhg-bioinformatics-group".
+// Stripping "-group-admin" as a suffix would fix that one and break another —
+// "su-multi-group-admin" is the group "multi-group" with an -admin suffix, not
+// the group "multi". The two are indistinguishable without knowing the real
+// group list, so this needs resolution against the store, not more suffixes.
 func groupsFromPolicies(policyStr string) []string {
 	if policyStr == "management" {
 		return []string{"*"}
@@ -74,9 +82,16 @@ func groupsFromPolicies(policyStr string) []string {
 		if p == "" || strings.HasPrefix(p, "role:") {
 			continue
 		}
-		g := p
-		if strings.HasPrefix(p, "su-") {
-			inner := p[3:]
+		// nsGuess above accepts both policy shapes — "member-<ns>" and
+		// "<ns>-member" — but only the suffix form was stripped here, so a
+		// "member-su-foo" policy resolved to namespace "su-foo" while
+		// reporting its group as "member-su-foo". Strip the prefix form too
+		// so the two agree. No deployment uses the prefix shape today; this
+		// keeps a policy named that way from being reported oddly rather
+		// than changing any current answer.
+		g := strings.TrimPrefix(p, "member-")
+		if strings.HasPrefix(g, nsPrefix) {
+			inner := strings.TrimPrefix(g, nsPrefix)
 			g = inner
 			for _, suf := range []string{"-pool", "-admin", "-member"} {
 				if strings.HasSuffix(inner, suf) {

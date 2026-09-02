@@ -21,7 +21,7 @@ const RendererVersion = "abc-auth-svc/v3.0"
 //     the CLI exchanges the opaque for real creds at /auth/exchange. Requires a
 //     non-empty opaqueToken.
 func renderConfigYAML(c ClusterInfo, slotName, groupName, nomadToken, minioAccessKey, minioSecretKey, credSource, opaqueToken string) (string, error) {
-	namespace := "su-" + groupName
+	namespace := namespaceForGroup(groupName)
 	cs := strings.ToLower(strings.TrimSpace(credSource))
 
 	switch cs {

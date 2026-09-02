@@ -77,7 +77,7 @@ func (s *Server) secretsNamespaceAndPath(ctx context.Context, slot *Slot, key, g
 	if groupName == "" {
 		namespace = "default"
 	} else {
-		namespace = "su-" + groupName
+		namespace = namespaceForGroup(groupName)
 	}
 	path = "abc/users/" + slot.SlotName + "/" + key
 	return namespace, path
