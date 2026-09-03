@@ -114,4 +114,5 @@ a public issue.
 
 ## Licence
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Eclipse Public License 2.0 — see [LICENSE](LICENSE); copyright holders are
+listed in [NOTICE](NOTICE).
